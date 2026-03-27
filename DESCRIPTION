@@ -1,0 +1,30 @@
+Package: cjapns
+Type: Package
+Title: Average Probability of Necessary and Sufficient Conditions in Conjoint
+    Experiments
+Version: 0.1.0
+Authors@R: c(
+    person("Lukas F.", "Stoetzer", email = "lukas.stoetzer@uni-wh.de",
+           role = c("aut", "cre")),
+    person("Asya", "Magazinnik", email = "a.magazinnik@hertie-school.org",
+           role = "aut"))
+Description: Implements the Average Probability of Necessary and Sufficient
+    conditions (APNS) for measuring attribute relevance in conjoint
+    experiments, as proposed by Stoetzer and Magazinnik (2026). Provides
+    nonparametric estimation of the Expected Probability of Necessary and
+    Sufficient conditions (EPNS) and Expected Average Probability of Necessary
+    and Sufficient conditions (EAPNS) under separable monotonicity and
+    conditional separable monotonicity assumptions. Supports multiple
+    inference methods including parametric bootstrap, nonparametric bootstrap,
+    jackknife, and analytical standard errors based on the folded normal
+    approximation.
+License: MIT + file LICENSE
+URL: https://github.com/lstoetze/cjapns
+BugReports: https://github.com/lstoetze/cjapns/issues
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 7.3.3
+Depends: R (>= 3.5.0)
+Imports: stats
+Suggests:
+    ggplot2
