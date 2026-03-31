@@ -36,9 +36,20 @@ print.cj_apns <- function(x, ...) {
 
   if (!is.null(x$pi_hat) && length(x$pi_hat) > 0) {
     cat("Preference group shares (pi_hat):\n")
-    for (a in names(x$pi_hat))
-      cat(sprintf("  %-27s pro: %.3f  con: %.3f\n",
-                  a, x$pi_hat[[a]], 1 - x$pi_hat[[a]]))
+    is_ranking <- isTRUE(x$pref_type == "ranking")
+    for (a in names(x$pi_hat)) {
+      pv <- x$pi_hat[[a]]
+      if (is_ranking) {
+        cat("  ", a, " (pair-specific pi):\n", sep = "")
+        for (nm in names(pv))
+          cat(sprintf("    %-45s %.3f\n", nm, pv[nm]))
+      } else if (length(pv) == 1) {
+        cat(sprintf("  %-27s pro: %.3f  con: %.3f\n", a, pv, 1 - pv))
+      } else {
+        parts <- paste(names(pv), sprintf("%.3f", pv), sep = ": ", collapse = "  ")
+        cat("  ", a, ": ", parts, "\n", sep = "")
+      }
+    }
     cat("\n")
   }
   invisible(x)
@@ -83,8 +94,16 @@ summary.cj_apns <- function(object, ...) {
       cat("  ", a, ":\n", sep = "")
       for (p in names(object$acmce[[a]])) {
         v <- object$acmce[[a]][[p]]
-        cat(sprintf("    %-20s  pro: %7.4f  con: %7.4f  pi: %.3f\n",
-                    p, v$pro, v$con, v$pi))
+        if (!is.null(v$pro)) {
+          cat(sprintf("    %-20s  pro: %7.4f  con: %7.4f  pi: %.3f\n",
+                      p, v$pro, v$con, v$pi))
+        } else {
+          grp_str <- paste(names(v$groups), sprintf("%7.4f", v$groups),
+                           sep = ": ", collapse = "  ")
+          pi_str  <- paste(names(v$pi), sprintf("%.3f", v$pi),
+                           sep = " = ", collapse = "  ")
+          cat(sprintf("    %-20s  %s  [pi: %s]\n", p, grp_str, pi_str))
+        }
       }
     }
     cat("\n")
@@ -166,12 +185,20 @@ as.data.frame.cj_apns <- function(x, ...) {
   if (!is.null(x$acmce)) for (a in names(x$acmce)) if (!is.null(x$acmce[[a]])) {
     for (p in names(x$acmce[[a]])) {
       v <- x$acmce[[a]][[p]]
-      nm_pro <- paste0("acmce.pro.", a, ".", p)
-      nm_con <- paste0("acmce.con.", a, ".", p)
-      rows <- c(rows, list(.make_row(a, "acmce_pro", "conditional", p,
-                                      v$pro, x, nm_pro)))
-      rows <- c(rows, list(.make_row(a, "acmce_con", "conditional", p,
-                                      v$con, x, nm_con)))
+      if (!is.null(v$pro)) {
+        nm_pro <- paste0("acmce.pro.", a, ".", p)
+        nm_con <- paste0("acmce.con.", a, ".", p)
+        rows <- c(rows, list(.make_row(a, "acmce_pro", "conditional", p,
+                                        v$pro, x, nm_pro)))
+        rows <- c(rows, list(.make_row(a, "acmce_con", "conditional", p,
+                                        v$con, x, nm_con)))
+      } else {
+        for (g in names(v$groups)) {
+          nm_g <- paste0("acmce.", g, ".", a, ".", p)
+          rows <- c(rows, list(.make_row(a, paste0("acmce_", g), "conditional", p,
+                                          v$groups[[g]], x, nm_g)))
+        }
+      }
     }
   }
 
