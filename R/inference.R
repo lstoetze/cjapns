@@ -36,22 +36,56 @@
   if (do_cond && !is.null(preferences)) {
     for (a in attr_names) {
       if (!a %in% preferences$attributes) next
-      pref_df <- preferences$data[!duplicated(preferences$data[[preferences$id_var]]),
-                                   c(preferences$id_var, a), drop = FALSE]
-      pref_map <- stats::setNames(pref_df[[a]], pref_df[[preferences$id_var]])
-      data$.pg <- pref_map[as.character(data[[id_var]])]
-      has <- !is.na(data$.pg)
-      if (sum(has) == 0) next
-      dm <- data[has, ]
-      for (grp in c(1, 0)) {
-        res <- estimate_amce(formula, dm[dm$.pg == grp, ], id = id)
-        for (lev in names(res$amce[[a]]$estimate)) {
-          key <- paste0(a, ".", lev, ".grp", grp)
-          cond_amce_info[[key]] <- list(
-            est = res$amce[[a]]$estimate[lev], se = res$amce[[a]]$se[lev])
+
+      if (preferences$type == "ranking") {
+        # ranking: pair-specific binary groups → keys include pair identity
+        rank_mat <- preferences$rank_data[[a]]
+        rank_ids <- rank_mat[[preferences$id_var]]
+        row_ids  <- as.character(data[[id_var]])
+        idx      <- match(row_ids, rank_ids)
+        levs_a   <- attributes_info[[a]]
+
+        for (q in seq_along(levs_a)) for (p in seq_along(levs_a)) {
+          if (q >= p) next
+          tq <- levs_a[q]; tp <- levs_a[p]
+          if (!tq %in% names(rank_mat) || !tp %in% names(rank_mat)) next
+          pg <- as.integer(rank_mat[[tq]][idx] < rank_mat[[tp]][idx])
+          for (grp in c(1L, 0L)) {
+            sub <- data[!is.na(pg) & pg == grp, , drop = FALSE]
+            if (nrow(sub) == 0) next
+            res <- estimate_amce(formula, sub, id = id)
+            if (!a %in% names(res$amce)) next
+            for (lev in names(res$amce[[a]]$estimate)) {
+              key <- .make_rank_key(a, lev, tq, tp, grp)
+              cond_amce_info[[key]] <- list(
+                est = res$amce[[a]]$estimate[lev],
+                se  = res$amce[[a]]$se[lev])
+            }
+          }
         }
+      } else {
+        # binary / multilevel: attribute-level groups
+        pref_df  <- preferences$data[!duplicated(preferences$data[[preferences$id_var]]),
+                                     c(preferences$id_var, a), drop = FALSE]
+        pref_map <- stats::setNames(pref_df[[a]], pref_df[[preferences$id_var]])
+        data$.pg <- pref_map[as.character(data[[id_var]])]
+        has <- !is.na(data$.pg)
+        if (sum(has) == 0) { data$.pg <- NULL; next }
+        dm <- data[has, ]
+        pg_sample   <- dm$.pg[!is.na(dm$.pg)]
+        pref_groups <- if (is.character(pg_sample)) sort(unique(pg_sample)) else c(1, 0)
+        for (grp in pref_groups) {
+          sub <- dm[dm$.pg == grp, ]
+          if (nrow(sub) == 0) next
+          res <- estimate_amce(formula, sub, id = id)
+          for (lev in names(res$amce[[a]]$estimate)) {
+            key <- paste0(a, ".", lev, ".grp.", grp)
+            cond_amce_info[[key]] <- list(
+              est = res$amce[[a]]$estimate[lev], se = res$amce[[a]]$se[lev])
+          }
+        }
+        data$.pg <- NULL
       }
-      data$.pg <- NULL
     }
   }
 
@@ -96,21 +130,45 @@
 
       eapns_cond_b <- NA_real_
       if (do_cond && a %in% names(pt$acmce) && !is.null(pt$acmce[[a]])) {
-        pi_val <- pt$pi_hat[[a]]
+        is_ranking_a  <- !is.null(preferences) && preferences$type == "ranking"
+        pi_info       <- pt$pi_hat[[a]]
+        is_multilevel_a <- !is_ranking_a && length(pi_info) > 1
         vals_c <- c()
         for (q in seq_along(levs)) for (p in seq_along(levs)) {
           if (q >= p) next
-          # Simulate conditional AMCEs
           lev_q <- levs[q]; lev_p <- levs[p]
-          v_pro <- .sim_cond_amce(cond_amce_info, a, lev_q, lev_p, base, 1)
-          v_con <- .sim_cond_amce(cond_amce_info, a, lev_q, lev_p, base, 0)
-          vals_c <- c(vals_c, pi_val * abs(v_pro) + (1 - pi_val) * abs(v_con))
+          pair  <- paste0(lev_q, " vs ", lev_p)
+          if (!pair %in% names(pt$acmce[[a]])) next
 
-          pair <- paste0(lev_q, " vs ", lev_p)
-          nm_pro <- paste0("acmce.pro.", a, ".", pair)
-          nm_con <- paste0("acmce.con.", a, ".", pair)
-          if (nm_pro %in% names(point_vec)) boot_mat[b, nm_pro] <- v_pro
-          if (nm_con %in% names(point_vec)) boot_mat[b, nm_con] <- v_con
+          if (is_ranking_a) {
+            # ranking: pair-specific binary groups
+            pi_pair <- pt$acmce[[a]][[pair]]$pi
+            v_pro <- .sim_cond_amce_rank(cond_amce_info, a, lev_q, lev_p, base, lev_q, lev_p, 1L)
+            v_con <- .sim_cond_amce_rank(cond_amce_info, a, lev_q, lev_p, base, lev_q, lev_p, 0L)
+            vals_c <- c(vals_c, pi_pair * abs(v_pro) + (1 - pi_pair) * abs(v_con))
+            nm_pro <- paste0("acmce.pro.", a, ".", pair)
+            nm_con <- paste0("acmce.con.", a, ".", pair)
+            if (nm_pro %in% names(point_vec)) boot_mat[b, nm_pro] <- v_pro
+            if (nm_con %in% names(point_vec)) boot_mat[b, nm_con] <- v_con
+          } else if (!is_multilevel_a) {
+            # binary: single scalar π for all pairs
+            v_pro <- .sim_cond_amce(cond_amce_info, a, lev_q, lev_p, base, 1)
+            v_con <- .sim_cond_amce(cond_amce_info, a, lev_q, lev_p, base, 0)
+            vals_c <- c(vals_c, pi_info * abs(v_pro) + (1 - pi_info) * abs(v_con))
+            nm_pro <- paste0("acmce.pro.", a, ".", pair)
+            nm_con <- paste0("acmce.con.", a, ".", pair)
+            if (nm_pro %in% names(point_vec)) boot_mat[b, nm_pro] <- v_pro
+            if (nm_con %in% names(point_vec)) boot_mat[b, nm_con] <- v_con
+          } else {
+            # multilevel: K groups, attribute-level π
+            grp_amces <- sapply(names(pi_info), function(g)
+              .sim_cond_amce(cond_amce_info, a, lev_q, lev_p, base, g))
+            vals_c <- c(vals_c, sum(pi_info * abs(grp_amces)))
+            for (g in names(pi_info)) {
+              nm_g <- paste0("acmce.", g, ".", a, ".", pair)
+              if (nm_g %in% names(point_vec)) boot_mat[b, nm_g] <- grp_amces[g]
+            }
+          }
         }
         eapns_cond_b <- sum(vals_c) / (Dl - 1)
       }
@@ -140,11 +198,32 @@
   list(se = se_vec, point = point_vec)
 }
 
-#' Simulate a conditional AMCE from the parametric bootstrap
+#' Simulate a conditional AMCE from the parametric bootstrap (binary/multilevel)
 #' @keywords internal
 .sim_cond_amce <- function(cond_amce_info, a, tq, tp, base, grp) {
   .get_sim <- function(lev) {
-    key <- paste0(a, ".", lev, ".grp", grp)
+    key <- paste0(a, ".", lev, ".grp.", grp)
+    info <- cond_amce_info[[key]]
+    if (is.null(info)) return(0)
+    stats::rnorm(1, info$est, info$se)
+  }
+  if (tq == base && tp == base) return(0)
+  if (tq == base) return(-.get_sim(tp))
+  if (tp == base) return(.get_sim(tq))
+  .get_sim(tq) - .get_sim(tp)
+}
+
+#' Build the cond_amce_info key for ranking-type preferences
+#' @keywords internal
+.make_rank_key <- function(a, lev, tq, tp, grp) {
+  paste0(a, ".", lev, ".pair.", make.names(tq), ".", make.names(tp), ".grp.", grp)
+}
+
+#' Simulate a conditional AMCE for ranking-type preferences (pair-specific keys)
+#' @keywords internal
+.sim_cond_amce_rank <- function(cond_amce_info, a, tq, tp, base, pair_tq, pair_tp, grp) {
+  .get_sim <- function(lev) {
+    key  <- .make_rank_key(a, lev, pair_tq, pair_tp, grp)
     info <- cond_amce_info[[key]]
     if (is.null(info)) return(0)
     stats::rnorm(1, info$est, info$se)
@@ -256,39 +335,50 @@
 
     # For conditional: more complex, use delta method on weighted sum
     if (do_cond && !is.null(pt$acmce) && !is.null(pt$acmce[[a]])) {
-      pi_val <- pt$pi_hat[[a]]
       var_eapns_c <- 0
       for (pair_nm in names(pt$acmce[[a]])) {
-        v <- pt$acmce[[a]][[pair_nm]]
-        # Approximate SEs for conditional AMCEs from the AMCE SEs
-        # (rough: use overall SE as proxy)
+        v  <- pt$acmce[[a]][[pair_nm]]
         tq <- strsplit(pair_nm, " vs ")[[1]][1]
         tp <- strsplit(pair_nm, " vs ")[[1]][2]
         if (tq == base) sig_approx <- amce_a$se[tp]
         else if (tp == base) sig_approx <- amce_a$se[tq]
         else sig_approx <- sqrt(amce_a$se[tq]^2 + amce_a$se[tp]^2)
-        # Scale SE for subgroup (roughly sqrt(1/pi) or sqrt(1/(1-pi)))
-        sig_pro <- sig_approx / sqrt(pi_val)
-        sig_con <- sig_approx / sqrt(1 - pi_val)
-        e_pro <- .folded_normal_mean(v$pro, sig_pro)
-        e_con <- .folded_normal_mean(v$con, sig_con)
-        var_pro <- v$pro^2 + sig_pro^2 - e_pro^2
-        var_con <- v$con^2 + sig_con^2 - e_con^2
-        var_epns_pair <- pi_val^2 * var_pro + (1 - pi_val)^2 * var_con
+
+        if (!is.null(v$pro)) {
+          # binary or ranking: v$pi is the pair-specific (or attribute-level) π
+          pi_val <- v$pi
+          sig_pro <- sig_approx / sqrt(pi_val)
+          sig_con <- sig_approx / sqrt(1 - pi_val)
+          e_pro <- .folded_normal_mean(v$pro, sig_pro)
+          e_con <- .folded_normal_mean(v$con, sig_con)
+          var_pro <- v$pro^2 + sig_pro^2 - e_pro^2
+          var_con <- v$con^2 + sig_con^2 - e_con^2
+          var_epns_pair <- pi_val^2 * var_pro + (1 - pi_val)^2 * var_con
+          nm_pro <- paste0("acmce.pro.", a, ".", pair_nm)
+          nm_con <- paste0("acmce.con.", a, ".", pair_nm)
+          if (nm_pro %in% names(se_vec)) se_vec[nm_pro] <- NA_real_
+          if (nm_con %in% names(se_vec)) se_vec[nm_con] <- NA_real_
+        } else {
+          # multilevel: K groups
+          pi_info <- v$pi
+          var_epns_pair <- sum(sapply(names(pi_info), function(g) {
+            pi_g   <- pi_info[g]
+            amce_g <- v$groups[g]
+            sig_g  <- sig_approx / sqrt(pi_g)
+            e_g    <- .folded_normal_mean(amce_g, sig_g)
+            pi_g^2 * (amce_g^2 + sig_g^2 - e_g^2)
+          }))
+          for (g in names(pi_info)) {
+            nm_g <- paste0("acmce.", g, ".", a, ".", pair_nm)
+            if (nm_g %in% names(se_vec)) se_vec[nm_g] <- NA_real_
+          }
+        }
         var_eapns_c <- var_eapns_c + var_epns_pair
       }
       Dl <- length(levs)
       se_eapns_c <- sqrt(var_eapns_c) / (Dl - 1)
       nm <- paste0("eapns.conditional.", a)
       if (nm %in% names(se_vec)) se_vec[nm] <- se_eapns_c
-
-      # SEs for conditional AMCEs
-      for (pair_nm in names(pt$acmce[[a]])) {
-        nm_pro <- paste0("acmce.pro.", a, ".", pair_nm)
-        nm_con <- paste0("acmce.con.", a, ".", pair_nm)
-        if (nm_pro %in% names(se_vec)) se_vec[nm_pro] <- NA_real_
-        if (nm_con %in% names(se_vec)) se_vec[nm_con] <- NA_real_
-      }
     }
   }
 

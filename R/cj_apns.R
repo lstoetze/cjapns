@@ -151,7 +151,8 @@ cj_apns <- function(formula, data, id,
          epns = pt$epns, eapns = pt$eapns,
          pi_hat = pt$pi_hat, acmce = pt$acmce,
          ci = ci, se_detail = se_detail,
-         alpha = alpha, B = B, call = cl),
+         alpha = alpha, B = B, call = cl,
+         pref_type = if (!is.null(preferences)) preferences$type else NULL),
     class = "cj_apns"
   )
 }
@@ -200,34 +201,118 @@ cj_apns <- function(formula, data, id,
     do_cond_a <- FALSE
     if (do_cond && a %in% preferences$attributes) {
       do_cond_a <- TRUE
-      pref_df <- preferences$data[!duplicated(preferences$data[[preferences$id_var]]),
-                                   c(preferences$id_var, a), drop = FALSE]
-      pref_map <- stats::setNames(pref_df[[a]], pref_df[[preferences$id_var]])
-      data$.pg <- pref_map[as.character(data[[id_var]])]
-      has <- !is.na(data$.pg)
 
-      if (sum(has) == 0) { do_cond_a <- FALSE
-      } else {
-        dm <- data[has, , drop = FALSE]
-        pi_val <- mean(dm$.pg, na.rm = TRUE)
-        amce_pro <- estimate_amce(formula, dm[dm$.pg == 1, ], id = id)
-        amce_con <- estimate_amce(formula, dm[dm$.pg == 0, ], id = id)
+      # ── ranking type: pair-specific p^{qp}_{il} (Proposition 8) ─────
+      if (preferences$type == "ranking") {
+        rank_mat  <- preferences$rank_data[[a]]
+        rank_ids  <- rank_mat[[preferences$id_var]]
+        row_ids   <- as.character(data[[id_var]])
+        idx       <- match(row_ids, rank_ids)
 
         epns_cond <- list(); acmce_a <- list()
         for (q in seq_along(levs)) for (p in seq_along(levs)) {
           if (q >= p) next
-          pair <- paste0(levs[q], " vs ", levs[p])
-          v_pro <- get_amce_for_pair(amce_pro, a, levs[q], levs[p], base)
-          v_con <- get_amce_for_pair(amce_con, a, levs[q], levs[p], base)
-          epns_cond[[pair]] <- list(tq = levs[q], tp = levs[p],
+          tq <- levs[q]; tp <- levs[p]
+          pair <- paste0(tq, " vs ", tp)
+          if (!tq %in% names(rank_mat) || !tp %in% names(rank_mat)) next
+
+          # π computed at respondent level (avoids row-duplication bias)
+          pi_val <- mean(rank_mat[[tq]] < rank_mat[[tp]], na.rm = TRUE)
+
+          # pair-specific binary indicator mapped to conjoint rows
+          data$.pg <- as.integer(rank_mat[[tq]][idx] < rank_mat[[tp]][idx])
+          has <- !is.na(data$.pg)
+          if (sum(has) == 0 || !any(data$.pg[has] == 1L) || !any(data$.pg[has] == 0L)) next
+
+          dm       <- data[has, , drop = FALSE]
+          amce_pro <- estimate_amce(formula, dm[dm$.pg == 1L, ], id = id)
+          amce_con <- estimate_amce(formula, dm[dm$.pg == 0L, ], id = id)
+
+          v_pro <- get_amce_for_pair(amce_pro, a, tq, tp, base)
+          v_con <- get_amce_for_pair(amce_con, a, tq, tp, base)
+
+          epns_cond[[pair]] <- list(tq = tq, tp = tp,
             estimate = pi_val * abs(v_pro) + (1 - pi_val) * abs(v_con),
             assumption = "conditional")
           acmce_a[[pair]] <- list(pro = v_pro, con = v_con, pi = pi_val)
         }
-        eapns_cond <- sum(sapply(epns_cond, `[[`, "estimate")) / (Dl - 1)
-        pi_hat[[a]] <- pi_val; acmce[[a]] <- acmce_a
+        data$.pg <- NULL
+
+        if (length(epns_cond) == 0) {
+          do_cond_a <- FALSE
+        } else {
+          eapns_cond <- sum(sapply(epns_cond, `[[`, "estimate")) / (Dl - 1)
+          # store pair-specific π as a named vector
+          pi_hat[[a]] <- stats::setNames(sapply(acmce_a, `[[`, "pi"), names(acmce_a))
+          acmce[[a]]  <- acmce_a
+        }
+
+      } else {
+        # ── binary / multilevel: attribute-level grouping ──────────────
+        pref_df  <- preferences$data[!duplicated(preferences$data[[preferences$id_var]]),
+                                     c(preferences$id_var, a), drop = FALSE]
+        pref_map <- stats::setNames(pref_df[[a]], pref_df[[preferences$id_var]])
+        data$.pg <- pref_map[as.character(data[[id_var]])]
+        has      <- !is.na(data$.pg)
+
+        if (sum(has) == 0) { do_cond_a <- FALSE
+        } else {
+          dm       <- data[has, , drop = FALSE]
+          pg_vals  <- dm$.pg[!is.na(dm$.pg)]
+          is_multilevel <- is.character(pg_vals)
+
+          if (is_multilevel) {
+            pref_groups <- sort(unique(pg_vals))
+            pi_vals <- stats::setNames(
+              sapply(pref_groups, function(g) mean(dm$.pg == g, na.rm = TRUE)),
+              pref_groups
+            )
+            amce_list <- stats::setNames(
+              lapply(pref_groups, function(g) {
+                sub_dm <- dm[!is.na(dm$.pg) & dm$.pg == g, , drop = FALSE]
+                if (nrow(sub_dm) == 0) return(NULL)
+                estimate_amce(formula, sub_dm, id = id)
+              }),
+              pref_groups
+            )
+
+            epns_cond <- list(); acmce_a <- list()
+            for (q in seq_along(levs)) for (p in seq_along(levs)) {
+              if (q >= p) next
+              pair <- paste0(levs[q], " vs ", levs[p])
+              grp_amces <- sapply(pref_groups, function(g) {
+                if (is.null(amce_list[[g]])) return(0)
+                get_amce_for_pair(amce_list[[g]], a, levs[q], levs[p], base)
+              })
+              names(grp_amces) <- pref_groups
+              epns_cond[[pair]] <- list(tq = levs[q], tp = levs[p],
+                estimate = sum(pi_vals * abs(grp_amces)), assumption = "conditional")
+              acmce_a[[pair]] <- list(groups = grp_amces, pi = pi_vals)
+            }
+            eapns_cond <- sum(sapply(epns_cond, `[[`, "estimate")) / (Dl - 1)
+            pi_hat[[a]] <- pi_vals; acmce[[a]] <- acmce_a
+          } else {
+            pi_val   <- mean(dm$.pg, na.rm = TRUE)
+            amce_pro <- estimate_amce(formula, dm[dm$.pg == 1, ], id = id)
+            amce_con <- estimate_amce(formula, dm[dm$.pg == 0, ], id = id)
+
+            epns_cond <- list(); acmce_a <- list()
+            for (q in seq_along(levs)) for (p in seq_along(levs)) {
+              if (q >= p) next
+              pair <- paste0(levs[q], " vs ", levs[p])
+              v_pro <- get_amce_for_pair(amce_pro, a, levs[q], levs[p], base)
+              v_con <- get_amce_for_pair(amce_con, a, levs[q], levs[p], base)
+              epns_cond[[pair]] <- list(tq = levs[q], tp = levs[p],
+                estimate = pi_val * abs(v_pro) + (1 - pi_val) * abs(v_con),
+                assumption = "conditional")
+              acmce_a[[pair]] <- list(pro = v_pro, con = v_con, pi = pi_val)
+            }
+            eapns_cond <- sum(sapply(epns_cond, `[[`, "estimate")) / (Dl - 1)
+            pi_hat[[a]] <- pi_val; acmce[[a]] <- acmce_a
+          }
+        }
+        data$.pg <- NULL
       }
-      data$.pg <- NULL
     }
 
     # ── store ───────────────────────────────────────────────────────────
@@ -275,8 +360,13 @@ cj_apns <- function(formula, data, id,
     for (a in attr_names) if (!is.null(pt$acmce[[a]])) {
       for (pair in names(pt$acmce[[a]])) {
         v <- pt$acmce[[a]][[pair]]
-        out <- c(out, stats::setNames(v$pro, paste0("acmce.pro.", a, ".", pair)))
-        out <- c(out, stats::setNames(v$con, paste0("acmce.con.", a, ".", pair)))
+        if (!is.null(v$pro)) {
+          out <- c(out, stats::setNames(v$pro, paste0("acmce.pro.", a, ".", pair)))
+          out <- c(out, stats::setNames(v$con, paste0("acmce.con.", a, ".", pair)))
+        } else {
+          for (g in names(v$groups))
+            out <- c(out, stats::setNames(v$groups[[g]], paste0("acmce.", g, ".", a, ".", pair)))
+        }
       }
     }
   }
