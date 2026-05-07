@@ -222,14 +222,20 @@ cj_apns <- function(formula, data, id,
           # pair-specific binary indicator mapped to conjoint rows
           data$.pg <- as.integer(rank_mat[[tq]][idx] < rank_mat[[tp]][idx])
           has <- !is.na(data$.pg)
-          if (sum(has) == 0 || !any(data$.pg[has] == 1L) || !any(data$.pg[has] == 0L)) next
+          if (sum(has) == 0) next
 
           dm       <- data[has, , drop = FALSE]
-          amce_pro <- estimate_amce(formula, dm[dm$.pg == 1L, ], id = id)
-          amce_con <- estimate_amce(formula, dm[dm$.pg == 0L, ], id = id)
+          has_pro  <- any(dm$.pg == 1L)
+          has_con  <- any(dm$.pg == 0L)
+          # Need at least one group to estimate anything
+          if (!has_pro && !has_con) next
 
-          v_pro <- get_amce_for_pair(amce_pro, a, tq, tp, base)
-          v_con <- get_amce_for_pair(amce_con, a, tq, tp, base)
+          v_pro <- if (has_pro) get_amce_for_pair(
+            estimate_amce(formula, dm[dm$.pg == 1L, ], id = id), a, tq, tp, base
+          ) else 0
+          v_con <- if (has_con) get_amce_for_pair(
+            estimate_amce(formula, dm[dm$.pg == 0L, ], id = id), a, tq, tp, base
+          ) else 0
 
           epns_cond[[pair]] <- list(tq = tq, tp = tp,
             estimate = pi_val * abs(v_pro) + (1 - pi_val) * abs(v_con),
