@@ -125,6 +125,7 @@
           vals <- c(vals, abs(get_amce_for_pair(
             sim_result, a, levs[q], levs[p], base)))
         }
+        # See cj_apns.R: unique pairs only, divide by (Dl - 1) not 2*(Dl - 1).
         eapns_sep_b <- sum(vals) / (Dl - 1)
       }
 

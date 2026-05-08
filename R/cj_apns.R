@@ -194,6 +194,9 @@ cj_apns <- function(formula, data, id,
         epns_sep[[pair]] <- list(tq = levs[q], tp = levs[p],
                                  estimate = val, assumption = "separability")
       }
+      # Iterates over unique pairs (q < p) and divides by (Dl - 1), not 2*(Dl - 1).
+      # Eq. 22 in the paper uses the full double sum over ordered pairs divided by
+      # 2*(Dl - 1); the two formulations are algebraically identical.
       eapns_sep <- sum(sapply(epns_sep, `[[`, "estimate")) / (Dl - 1)
     }
 
