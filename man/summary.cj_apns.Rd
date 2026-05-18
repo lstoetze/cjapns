@@ -12,5 +12,5 @@
 \item{...}{Ignored.}
 }
 \description{
-Prints a detailed summary including pairwise EPNS and conditional AMCEs.
+Prints a detailed summary including pairwise APNS and conditional AMCEs.
 }

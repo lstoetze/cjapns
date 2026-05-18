@@ -6,17 +6,17 @@
 \alias{cjapns}
 \title{cjapns: Average Probability of Necessary and Sufficient Conditions in Conjoint Experiments}
 \description{
-Implements the Average Probability of Necessary and Sufficient conditions (APNS) for measuring attribute relevance in conjoint experiments, as proposed by Stoetzer and Magazinnik (2026). Provides nonparametric estimation of the Expected Probability of Necessary and Sufficient conditions (EPNS) and Expected Average Probability of Necessary and Sufficient conditions (EAPNS) under separable monotonicity and conditional separable monotonicity assumptions. Supports multiple inference methods including parametric bootstrap, nonparametric bootstrap, jackknife, and analytical standard errors based on the folded normal approximation.
+Implements the Average Probability of Necessary and Sufficient conditions (APNS) for measuring attribute relevance in conjoint experiments, as proposed by Stoetzer and Magazinnik (2026). Provides nonparametric estimation of the Expected Probability of Necessary and Sufficient conditions (APNS) and Expected Average Probability of Necessary and Sufficient conditions (MAPNS) under separable monotonicity and conditional separable monotonicity assumptions. Supports multiple inference methods including parametric bootstrap, nonparametric bootstrap, jackknife, and analytical standard errors based on the folded normal approximation.
 
 Implements the Average Probability of Necessary and Sufficient conditions
 (APNS) for measuring attribute relevance in conjoint experiments. The main
-function \code{cj_apns} estimates AMCEs, EPNS, and EAPNS under separable or
+function \code{cj_apns} estimates AMCEs, APNS, and MAPNS under separable or
 conditional separable monotonicity assumptions.
 }
 \section{Main functions}{
 
 \itemize{
-  \item \code{cj_apns}: Estimate AMCE, EPNS, or EAPNS.
+  \item \code{cj_apns}: Estimate AMCE, APNS, or MAPNS.
   \item \code{make_preferences}: Prepare preference data for conditional
     monotonicity.
   \item \code{make_design}: Specify non-uniform randomization designs.

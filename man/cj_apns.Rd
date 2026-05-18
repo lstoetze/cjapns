@@ -8,7 +8,7 @@ cj_apns(
   formula,
   data,
   id,
-  estimand = c("eapns", "epns", "amce"),
+  estimand = c("mapns", "apns", "amce"),
   assumption = c("separability", "conditional", "both"),
   preferences = NULL,
   se = c("parametric", "none", "bootstrap", "folded_normal", "jackknife"),
@@ -29,13 +29,13 @@ contain the outcome, attribute columns, and a respondent identifier.}
 (e.g., `~ ResponseId`). Required.}
 
 \item{estimand}{Which estimand to compute:
-* `"eapns"` (default): Expected Average Probability of Necessary and
+* `"mapns"` (default): Expected Average Probability of Necessary and
   Sufficient conditions, summarising overall attribute relevance.
-* `"epns"`: Pairwise Expected Probability of Necessary and Sufficient.
+* `"apns"`: Pairwise Expected Probability of Necessary and Sufficient.
 * `"amce"`: Standard Average Marginal Component Effects only.}
 
 \item{assumption}{Identifying assumption:
-* `"separability"` (default): Separable monotonicity. EPNS = |AMCE|.
+* `"separability"` (default): Separable monotonicity. APNS = |AMCE|.
 * `"conditional"`: Conditional separable monotonicity. Requires
   `preferences`.
 * `"both"`: Estimate under both assumptions for comparison.}
@@ -67,7 +67,7 @@ contain the outcome, attribute columns, and a respondent identifier.}
 An object of class `"cj_apns"` with components:
   * `estimand`, `assumption`, `se_method`: as requested.
   * `amce`: AMCE estimates per attribute.
-  * `epns`, `eapns`: causal attribution estimates (if requested).
+  * `apns`, `mapns`: causal attribution estimates (if requested).
   * `acmce`, `pi_hat`: conditional AMCEs and group shares (if conditional).
   * `ci`: confidence intervals (if SEs requested).
   * `se_detail`: named vector of standard errors.
@@ -75,14 +75,14 @@ An object of class `"cj_apns"` with components:
 \description{
 Main function for estimating the Average Probability of Necessary and
 Sufficient conditions (APNS) in conjoint experiments. Computes AMCEs,
-EPNS, and/or EAPNS under separable or conditional separable monotonicity,
+APNS, and/or MAPNS under separable or conditional separable monotonicity,
 with multiple options for inference.
 }
 \examples{
 \dontrun{
 data(cnj_cand)
 
-# --- EAPNS under separable monotonicity, no SEs ---
+# --- MAPNS under separable monotonicity, no SEs ---
 res <- cj_apns(vote ~ borders + eurobonds + immucard + schools,
                data = cnj_cand, id = ~ ResponseId, se = "none")
 res

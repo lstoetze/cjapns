@@ -7,7 +7,7 @@
 #
 # The AMCE is asymptotically normal. We draw B samples of AMCE from
 # N(amce_hat, se_hat^2), apply the absolute-value / weighted plugin
-# transformation, and take the SD of the resulting EAPNS distribution.
+# transformation, and take the SD of the resulting MAPNS distribution.
 # This correctly propagates uncertainty through the |.| mapping.
 
 #' @keywords internal
@@ -110,8 +110,8 @@
 
     sim_result <- list(amce = sim_amce, attributes = attributes_info)
 
-    # Compute EAPNS from simulated AMCEs
-    sim_eapns <- list()
+    # Compute MAPNS from simulated AMCEs
+    sim_mapns <- list()
     sim_acmce <- list()
 
     for (a in attr_names) {
@@ -125,10 +125,10 @@
           vals <- c(vals, abs(get_amce_for_pair(
             sim_result, a, levs[q], levs[p], base)))
         }
-        eapns_sep_b <- sum(vals) / (Dl * (Dl - 1) / 2)
+        mapns_sep_b <- sum(vals) / (Dl * (Dl - 1) / 2)
       }
 
-      eapns_cond_b <- NA_real_
+      mapns_cond_b <- NA_real_
       if (do_cond && a %in% names(pt$acmce) && !is.null(pt$acmce[[a]])) {
         is_ranking_a  <- !is.null(preferences) && preferences$type == "ranking"
         pi_info       <- pt$pi_hat[[a]]
@@ -170,17 +170,17 @@
             }
           }
         }
-        eapns_cond_b <- sum(vals_c) / (Dl * (Dl - 1) / 2)
+        mapns_cond_b <- sum(vals_c) / (Dl * (Dl - 1) / 2)
       }
 
       # Store in boot_mat
       if (do_sep) {
-        nm <- paste0("eapns.separability.", a)
-        if (nm %in% colnames(boot_mat)) boot_mat[b, nm] <- eapns_sep_b
+        nm <- paste0("mapns.separability.", a)
+        if (nm %in% colnames(boot_mat)) boot_mat[b, nm] <- mapns_sep_b
       }
-      if (do_cond && !is.na(eapns_cond_b)) {
-        nm <- paste0("eapns.conditional.", a)
-        if (nm %in% colnames(boot_mat)) boot_mat[b, nm] <- eapns_cond_b
+      if (do_cond && !is.na(mapns_cond_b)) {
+        nm <- paste0("mapns.conditional.", a)
+        if (nm %in% colnames(boot_mat)) boot_mat[b, nm] <- mapns_cond_b
       }
     }
 
@@ -292,7 +292,7 @@
 #' @keywords internal
 .se_folded_normal <- function(pt, assumption) {
   attr_names <- names(pt$attributes)
-  point_vec <- .flatten_estimates(pt, "eapns", assumption, attr_names)
+  point_vec <- .flatten_estimates(pt, "mapns", assumption, attr_names)
   se_vec <- rep(NA_real_, length(point_vec))
   names(se_vec) <- names(point_vec)
 
@@ -310,9 +310,9 @@
       if (nm %in% names(se_vec)) se_vec[nm] <- amce_a$se[lev]
     }
 
-    # Folded normal SE for EAPNS under separability
+    # Folded normal SE for MAPNS under separability
     if (do_sep) {
-      var_eapns <- 0
+      var_mapns <- 0
       n_pairs <- 0
       for (q in seq_along(levs)) for (p in seq_along(levs)) {
         if (q >= p) next
@@ -328,18 +328,18 @@
         }
         e_abs <- .folded_normal_mean(mu, sig)
         var_abs <- mu^2 + sig^2 - e_abs^2
-        var_eapns <- var_eapns + var_abs
+        var_mapns <- var_mapns + var_abs
       }
-      # EAPNS = sum / n_pairs, so Var(EAPNS) = sum(Var) / n_pairs^2
+      # MAPNS = sum / n_pairs, so Var(MAPNS) = sum(Var) / n_pairs^2
       n_pairs_fn <- Dl * (Dl - 1) / 2
-      se_eapns <- sqrt(var_eapns) / n_pairs_fn
-      nm <- paste0("eapns.separability.", a)
-      if (nm %in% names(se_vec)) se_vec[nm] <- se_eapns
+      se_mapns <- sqrt(var_mapns) / n_pairs_fn
+      nm <- paste0("mapns.separability.", a)
+      if (nm %in% names(se_vec)) se_vec[nm] <- se_mapns
     }
 
     # For conditional: more complex, use delta method on weighted sum
     if (do_cond && !is.null(pt$acmce) && !is.null(pt$acmce[[a]])) {
-      var_eapns_c <- 0
+      var_mapns_c <- 0
       for (pair_nm in names(pt$acmce[[a]])) {
         v  <- pt$acmce[[a]][[pair_nm]]
         tq <- strsplit(pair_nm, " vs ")[[1]][1]
@@ -357,7 +357,7 @@
           e_con <- .folded_normal_mean(v$con, sig_con)
           var_pro <- v$pro^2 + sig_pro^2 - e_pro^2
           var_con <- v$con^2 + sig_con^2 - e_con^2
-          var_epns_pair <- pi_val^2 * var_pro + (1 - pi_val)^2 * var_con
+          var_apns_pair <- pi_val^2 * var_pro + (1 - pi_val)^2 * var_con
           nm_pro <- paste0("acmce.pro.", a, ".", pair_nm)
           nm_con <- paste0("acmce.con.", a, ".", pair_nm)
           if (nm_pro %in% names(se_vec)) se_vec[nm_pro] <- NA_real_
@@ -365,7 +365,7 @@
         } else {
           # multilevel: K groups
           pi_info <- v$pi
-          var_epns_pair <- sum(sapply(names(pi_info), function(g) {
+          var_apns_pair <- sum(sapply(names(pi_info), function(g) {
             pi_g   <- pi_info[g]
             amce_g <- v$groups[g]
             sig_g  <- sig_approx / sqrt(pi_g)
@@ -377,12 +377,12 @@
             if (nm_g %in% names(se_vec)) se_vec[nm_g] <- NA_real_
           }
         }
-        var_eapns_c <- var_eapns_c + var_epns_pair
+        var_mapns_c <- var_mapns_c + var_apns_pair
       }
       Dl <- length(levs)
-      se_eapns_c <- sqrt(var_eapns_c) / (Dl * (Dl - 1) / 2)
-      nm <- paste0("eapns.conditional.", a)
-      if (nm %in% names(se_vec)) se_vec[nm] <- se_eapns_c
+      se_mapns_c <- sqrt(var_mapns_c) / (Dl * (Dl - 1) / 2)
+      nm <- paste0("mapns.conditional.", a)
+      if (nm %in% names(se_vec)) se_vec[nm] <- se_mapns_c
     }
   }
 

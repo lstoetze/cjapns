@@ -9,7 +9,7 @@
 \arguments{
 \item{x}{An object of class `"cj_apns"`.}
 
-\item{what}{Which estimand to plot: `"eapns"`, `"epns"`, or `"amce"`.
+\item{what}{Which estimand to plot: `"mapns"`, `"apns"`, or `"amce"`.
 Defaults to the estimand stored in `x`.}
 
 \item{...}{Passed to ggplot2 functions.}
@@ -18,7 +18,7 @@ Defaults to the estimand stored in `x`.}
 A ggplot2 object (invisibly).
 }
 \description{
-Produces a dot-and-whisker plot of EAPNS, EPNS, or AMCE estimates,
+Produces a dot-and-whisker plot of MAPNS, APNS, or AMCE estimates,
 replicating the style of Figure 2 in Stoetzer & Magazinnik (2026).
 Requires \pkg{ggplot2}.
 }

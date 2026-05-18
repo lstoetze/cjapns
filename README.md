@@ -16,7 +16,7 @@ remotes::install_github("lstoetze/cjapns")
 
 Standard conjoint analysis estimates Average Marginal Component Effects (AMCEs), which measure how changing an attribute level affects profile selection. However, the AMCE is not well suited for assessing **attribute relevance** — a zero AMCE can arise even when an attribute is highly important, if respondents disagree on the preferred direction.
 
-The APNS estimand captures the probability that a change in an attribute level is both *necessary* and *sufficient* for a respondent's choice — a direct measure of attribute relevance. Under separable monotonicity, the EAPNS simplifies to the average absolute AMCE. Under the more realistic conditional separable monotonicity, it is a weighted sum of absolute conditional AMCEs by preference group.
+The APNS estimand captures the probability that a change in an attribute level is both *necessary* and *sufficient* for a respondent's choice — a direct measure of attribute relevance. Under separable monotonicity, the MAPNS simplifies to the average absolute AMCE. Under the more realistic conditional separable monotonicity, it is a weighted sum of absolute conditional AMCEs by preference group.
 
 ## Quick start
 
@@ -33,7 +33,7 @@ names(pref_dat) <- gsub("^Att_", "", names(pref_dat))
 
 prefs <- make_preferences(pref_dat, id = ~ ResponseId, type = "binary")
 
-# ── 2. Estimate EAPNS under both assumptions ─────────────────────────
+# ── 2. Estimate MAPNS under both assumptions ─────────────────────────
 
 res <- cj_apns(
   vote ~ borders + eurobonds + immucard + schools + tracingapp,
@@ -55,12 +55,12 @@ plot(res)
 # Or build a custom ggplot from the tidy data frame
 library(ggplot2)
 df <- as.data.frame(res)
-df_eapns <- df[df$estimand == "eapns", ]
-df_eapns$assumption <- factor(df_eapns$assumption,
+df_mapns <- df[df$estimand == "mapns", ]
+df_mapns$assumption <- factor(df_mapns$assumption,
   levels = c("conditional", "separability"),
   labels = c("APNS cond. sep. mono.", "APNS sep. mono."))
 
-ggplot(df_eapns, aes(x = reorder(attribute, estimate), y = estimate,
+ggplot(df_mapns, aes(x = reorder(attribute, estimate), y = estimate,
                       col = assumption,
                       ymin = lower, ymax = upper)) +
   geom_pointrange(position = position_dodge(0.3)) +
@@ -76,7 +76,7 @@ ggplot(df_eapns, aes(x = reorder(attribute, estimate), y = estimate,
 
 | Function | Description |
 |----------|-------------|
-| `cj_apns()` | Estimate AMCE, EPNS, or EAPNS with multiple SE methods |
+| `cj_apns()` | Estimate AMCE, APNS, or MAPNS with multiple SE methods |
 | `make_preferences()` | Prepare preference data for conditional monotonicity |
 | `make_design()` | Specify non-uniform randomization designs |
 | `print()`, `summary()` | Display results |

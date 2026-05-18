@@ -2,7 +2,7 @@
 #'
 #' Main function for estimating the Average Probability of Necessary and
 #' Sufficient conditions (APNS) in conjoint experiments. Computes AMCEs,
-#' EPNS, and/or EAPNS under separable or conditional separable monotonicity,
+#' APNS, and/or MAPNS under separable or conditional separable monotonicity,
 #' with multiple options for inference.
 #'
 #' @param formula A formula: `outcome ~ attr1 + attr2 + ...`. The LHS is the
@@ -13,12 +13,12 @@
 #' @param id A one-sided formula for the respondent ID variable
 #'   (e.g., `~ ResponseId`). Required.
 #' @param estimand Which estimand to compute:
-#'   * `"eapns"` (default): Expected Average Probability of Necessary and
+#'   * `"mapns"` (default): Expected Average Probability of Necessary and
 #'     Sufficient conditions, summarising overall attribute relevance.
-#'   * `"epns"`: Pairwise Expected Probability of Necessary and Sufficient.
+#'   * `"apns"`: Pairwise Expected Probability of Necessary and Sufficient.
 #'   * `"amce"`: Standard Average Marginal Component Effects only.
 #' @param assumption Identifying assumption:
-#'   * `"separability"` (default): Separable monotonicity. EPNS = |AMCE|.
+#'   * `"separability"` (default): Separable monotonicity. APNS = |AMCE|.
 #'   * `"conditional"`: Conditional separable monotonicity. Requires
 #'     `preferences`.
 #'   * `"both"`: Estimate under both assumptions for comparison.
@@ -44,7 +44,7 @@
 #' @return An object of class `"cj_apns"` with components:
 #'   * `estimand`, `assumption`, `se_method`: as requested.
 #'   * `amce`: AMCE estimates per attribute.
-#'   * `epns`, `eapns`: causal attribution estimates (if requested).
+#'   * `apns`, `mapns`: causal attribution estimates (if requested).
 #'   * `acmce`, `pi_hat`: conditional AMCEs and group shares (if conditional).
 #'   * `ci`: confidence intervals (if SEs requested).
 #'   * `se_detail`: named vector of standard errors.
@@ -60,7 +60,7 @@
 #' \dontrun{
 #' data(cnj_cand)
 #'
-#' # --- EAPNS under separable monotonicity, no SEs ---
+#' # --- MAPNS under separable monotonicity, no SEs ---
 #' res <- cj_apns(vote ~ borders + eurobonds + immucard + schools,
 #'                data = cnj_cand, id = ~ ResponseId, se = "none")
 #' res
@@ -89,7 +89,7 @@
 #'
 #' @export
 cj_apns <- function(formula, data, id,
-                     estimand = c("eapns", "epns", "amce"),
+                     estimand = c("mapns", "apns", "amce"),
                      assumption = c("separability", "conditional", "both"),
                      preferences = NULL,
                      se = c("parametric", "none", "bootstrap",
@@ -161,7 +161,7 @@ cj_apns <- function(formula, data, id,
   structure(
     list(estimand = estimand, assumption = assumption, se_method = se,
          attributes = pt$attributes, amce = pt$amce,
-         epns = pt$epns, eapns = pt$eapns,
+         apns = pt$apns, mapns = pt$mapns,
          pi_hat = pt$pi_hat, acmce = pt$acmce,
          ci = ci, se_detail = se_detail,
          alpha = alpha, B = B, call = cl,
@@ -186,9 +186,9 @@ cj_apns <- function(formula, data, id,
 
   if (estimand == "amce")
     return(list(attributes = attributes_info, amce = amce_result$amce,
-                epns = NULL, eapns = NULL, pi_hat = NULL, acmce = NULL))
+                apns = NULL, mapns = NULL, pi_hat = NULL, acmce = NULL))
 
-  epns <- list(); eapns <- list()
+  apns <- list(); mapns <- list()
   pi_hat <- list(); acmce <- list()
   do_sep  <- assumption %in% c("separability", "both")
   do_cond <- assumption %in% c("conditional", "both")
@@ -199,16 +199,16 @@ cj_apns <- function(formula, data, id,
 
     # ── separable monotonicity ──────────────────────────────────────────
     if (do_sep) {
-      epns_sep <- list()
+      apns_sep <- list()
       for (q in seq_along(levs)) for (p in seq_along(levs)) {
         if (q >= p) next
         pair <- paste0(levs[q], " vs ", levs[p])
         val <- abs(get_amce_for_pair(amce_result, a, levs[q], levs[p], base))
-        epns_sep[[pair]] <- list(tq = levs[q], tp = levs[p],
+        apns_sep[[pair]] <- list(tq = levs[q], tp = levs[p],
                                  estimate = val, assumption = "separability")
       }
       # Paper Eq. (10): MAPNS = [2/(Dl*(Dl-1))] * sum_{unique pairs} APNS = avg over unique pairs
-      eapns_sep <- sum(sapply(epns_sep, `[[`, "estimate")) / (Dl * (Dl - 1) / 2)
+      mapns_sep <- sum(sapply(apns_sep, `[[`, "estimate")) / (Dl * (Dl - 1) / 2)
     }
 
     # ── conditional separable monotonicity ──────────────────────────────
@@ -223,7 +223,7 @@ cj_apns <- function(formula, data, id,
         row_ids   <- as.character(data[[id_var]])
         idx       <- match(row_ids, rank_ids)
 
-        epns_cond <- list(); acmce_a <- list()
+        apns_cond <- list(); acmce_a <- list()
         for (q in seq_along(levs)) for (p in seq_along(levs)) {
           if (q >= p) next
           tq <- levs[q]; tp <- levs[p]
@@ -251,17 +251,17 @@ cj_apns <- function(formula, data, id,
             estimate_amce(formula, dm[dm$.pg == 0L, ], id = id), a, tq, tp, base
           ) else 0
 
-          epns_cond[[pair]] <- list(tq = tq, tp = tp,
+          apns_cond[[pair]] <- list(tq = tq, tp = tp,
             estimate = pi_val * abs(v_pro) + (1 - pi_val) * abs(v_con),
             assumption = "conditional")
           acmce_a[[pair]] <- list(pro = v_pro, con = v_con, pi = pi_val)
         }
         data$.pg <- NULL
 
-        if (length(epns_cond) == 0) {
+        if (length(apns_cond) == 0) {
           do_cond_a <- FALSE
         } else {
-          eapns_cond <- sum(sapply(epns_cond, `[[`, "estimate")) / (Dl * (Dl - 1) / 2)
+          mapns_cond <- sum(sapply(apns_cond, `[[`, "estimate")) / (Dl * (Dl - 1) / 2)
           # store pair-specific π as a named vector
           pi_hat[[a]] <- stats::setNames(sapply(acmce_a, `[[`, "pi"), names(acmce_a))
           acmce[[a]]  <- acmce_a
@@ -296,7 +296,7 @@ cj_apns <- function(formula, data, id,
               pref_groups
             )
 
-            epns_cond <- list(); acmce_a <- list()
+            apns_cond <- list(); acmce_a <- list()
             for (q in seq_along(levs)) for (p in seq_along(levs)) {
               if (q >= p) next
               pair <- paste0(levs[q], " vs ", levs[p])
@@ -305,29 +305,29 @@ cj_apns <- function(formula, data, id,
                 get_amce_for_pair(amce_list[[g]], a, levs[q], levs[p], base)
               })
               names(grp_amces) <- pref_groups
-              epns_cond[[pair]] <- list(tq = levs[q], tp = levs[p],
+              apns_cond[[pair]] <- list(tq = levs[q], tp = levs[p],
                 estimate = sum(pi_vals * abs(grp_amces)), assumption = "conditional")
               acmce_a[[pair]] <- list(groups = grp_amces, pi = pi_vals)
             }
-            eapns_cond <- sum(sapply(epns_cond, `[[`, "estimate")) / (Dl * (Dl - 1) / 2)
+            mapns_cond <- sum(sapply(apns_cond, `[[`, "estimate")) / (Dl * (Dl - 1) / 2)
             pi_hat[[a]] <- pi_vals; acmce[[a]] <- acmce_a
           } else {
             pi_val   <- mean(dm$.pg, na.rm = TRUE)
             amce_pro <- estimate_amce(formula, dm[dm$.pg == 1, ], id = id)
             amce_con <- estimate_amce(formula, dm[dm$.pg == 0, ], id = id)
 
-            epns_cond <- list(); acmce_a <- list()
+            apns_cond <- list(); acmce_a <- list()
             for (q in seq_along(levs)) for (p in seq_along(levs)) {
               if (q >= p) next
               pair <- paste0(levs[q], " vs ", levs[p])
               v_pro <- get_amce_for_pair(amce_pro, a, levs[q], levs[p], base)
               v_con <- get_amce_for_pair(amce_con, a, levs[q], levs[p], base)
-              epns_cond[[pair]] <- list(tq = levs[q], tp = levs[p],
+              apns_cond[[pair]] <- list(tq = levs[q], tp = levs[p],
                 estimate = pi_val * abs(v_pro) + (1 - pi_val) * abs(v_con),
                 assumption = "conditional")
               acmce_a[[pair]] <- list(pro = v_pro, con = v_con, pi = pi_val)
             }
-            eapns_cond <- sum(sapply(epns_cond, `[[`, "estimate")) / (Dl * (Dl - 1) / 2)
+            mapns_cond <- sum(sapply(apns_cond, `[[`, "estimate")) / (Dl * (Dl - 1) / 2)
             pi_hat[[a]] <- pi_val; acmce[[a]] <- acmce_a
           }
         }
@@ -337,20 +337,20 @@ cj_apns <- function(formula, data, id,
 
     # ── store ───────────────────────────────────────────────────────────
     if (assumption == "separability") {
-      epns[[a]] <- epns_sep; eapns[[a]] <- eapns_sep
+      apns[[a]] <- apns_sep; mapns[[a]] <- mapns_sep
     } else if (assumption == "conditional" && do_cond_a) {
-      epns[[a]] <- epns_cond; eapns[[a]] <- eapns_cond
+      apns[[a]] <- apns_cond; mapns[[a]] <- mapns_cond
     } else if (assumption == "both") {
-      epns[[a]]  <- list(separability = epns_sep,
-                         conditional = if (do_cond_a) epns_cond else NULL)
-      eapns[[a]] <- list(separability = eapns_sep,
-                         conditional = if (do_cond_a) eapns_cond else NULL)
+      apns[[a]]  <- list(separability = apns_sep,
+                         conditional = if (do_cond_a) apns_cond else NULL)
+      mapns[[a]] <- list(separability = mapns_sep,
+                         conditional = if (do_cond_a) mapns_cond else NULL)
     }
   }
 
   list(attributes = attributes_info, amce = amce_result$amce,
-       epns = if (estimand %in% c("epns", "eapns")) epns else NULL,
-       eapns = if (estimand == "eapns") eapns else NULL,
+       apns = if (estimand %in% c("apns", "mapns")) apns else NULL,
+       mapns = if (estimand == "mapns") mapns else NULL,
        pi_hat = if (do_cond) pi_hat else NULL,
        acmce = if (do_cond) acmce else NULL)
 }
@@ -365,15 +365,15 @@ cj_apns <- function(formula, data, id,
     names(est) <- paste0("amce.", a, ".", names(est))
     out <- c(out, est)
   }
-  if (!is.null(pt$eapns)) {
+  if (!is.null(pt$mapns)) {
     for (a in attr_names) {
-      val <- pt$eapns[[a]]
+      val <- pt$mapns[[a]]
       if (assumption == "both" && is.list(val)) {
         for (asn in c("separability", "conditional"))
           if (!is.null(val[[asn]]))
-            out <- c(out, stats::setNames(val[[asn]], paste0("eapns.", asn, ".", a)))
+            out <- c(out, stats::setNames(val[[asn]], paste0("mapns.", asn, ".", a)))
       } else if (is.numeric(val))
-        out <- c(out, stats::setNames(val, paste0("eapns.", assumption, ".", a)))
+        out <- c(out, stats::setNames(val, paste0("mapns.", assumption, ".", a)))
     }
   }
   if (!is.null(pt$acmce)) {

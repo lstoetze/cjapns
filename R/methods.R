@@ -17,18 +17,18 @@ print.cj_apns <- function(x, ...) {
     }
   }
 
-  if (x$estimand %in% c("epns", "eapns") && !is.null(x$eapns)) {
-    cat("Expected Avg. Probability of Necessary & Sufficient (EAPNS):\n\n")
-    for (a in names(x$eapns)) {
-      val <- x$eapns[[a]]
+  if (x$estimand %in% c("apns", "mapns") && !is.null(x$mapns)) {
+    cat("Expected Avg. Probability of Necessary & Sufficient (MAPNS):\n\n")
+    for (a in names(x$mapns)) {
+      val <- x$mapns[[a]]
       if (x$assumption == "both" && is.list(val)) {
         cat("  ", a, ":\n", sep = "")
         for (asn in names(val)) if (!is.null(val[[asn]]))
           cat(sprintf("    %-22s %7.4f%s\n", asn, val[[asn]],
-                      .ci_str(x, paste0("eapns.", asn, ".", a))))
+                      .ci_str(x, paste0("mapns.", asn, ".", a))))
       } else {
         cat(sprintf("  %-27s %7.4f%s\n", a, val,
-                    .ci_str(x, paste0("eapns.", x$assumption, ".", a))))
+                    .ci_str(x, paste0("mapns.", x$assumption, ".", a))))
       }
     }
     cat("\n")
@@ -58,7 +58,7 @@ print.cj_apns <- function(x, ...) {
 
 #' Summary method for cj_apns objects
 #'
-#' Prints a detailed summary including pairwise EPNS and conditional AMCEs.
+#' Prints a detailed summary including pairwise APNS and conditional AMCEs.
 #'
 #' @param object An object of class `"cj_apns"`.
 #' @param ... Ignored.
@@ -69,11 +69,11 @@ summary.cj_apns <- function(object, ...) {
   cat("Call:\n"); print(object$call); cat("\n")
   print.cj_apns(object)
 
-  if (object$estimand == "eapns" && !is.null(object$epns)) {
-    cat("Pairwise EPNS:\n")
-    for (a in names(object$epns)) {
+  if (object$estimand == "mapns" && !is.null(object$apns)) {
+    cat("Pairwise APNS:\n")
+    for (a in names(object$apns)) {
       cat("  ", a, ":\n", sep = "")
-      pairs <- object$epns[[a]]
+      pairs <- object$apns[[a]]
       if (object$assumption == "both") {
         for (asn in names(pairs)) if (!is.null(pairs[[asn]])) {
           cat("    [", asn, "]\n")
@@ -145,37 +145,37 @@ as.data.frame.cj_apns <- function(x, ...) {
     }
   }
 
-  # EAPNS
-  if (!is.null(x$eapns)) for (a in names(x$eapns)) {
-    val <- x$eapns[[a]]
+  # MAPNS
+  if (!is.null(x$mapns)) for (a in names(x$mapns)) {
+    val <- x$mapns[[a]]
     if (x$assumption == "both" && is.list(val)) {
       for (asn in names(val)) if (!is.null(val[[asn]])) {
-        nm <- paste0("eapns.", asn, ".", a)
-        rows <- c(rows, list(.make_row(a, "eapns", asn, "all pairs",
+        nm <- paste0("mapns.", asn, ".", a)
+        rows <- c(rows, list(.make_row(a, "mapns", asn, "all pairs",
                                         val[[asn]], x, nm)))
       }
     } else {
-      nm <- paste0("eapns.", x$assumption, ".", a)
-      rows <- c(rows, list(.make_row(a, "eapns", x$assumption, "all pairs",
+      nm <- paste0("mapns.", x$assumption, ".", a)
+      rows <- c(rows, list(.make_row(a, "mapns", x$assumption, "all pairs",
                                       val, x, nm)))
     }
   }
 
-  # EPNS
-  if (!is.null(x$epns)) for (a in names(x$epns)) {
-    pairs <- x$epns[[a]]
+  # APNS
+  if (!is.null(x$apns)) for (a in names(x$apns)) {
+    pairs <- x$apns[[a]]
     if (x$assumption == "both") {
       for (asn in names(pairs)) if (!is.null(pairs[[asn]])) {
         for (p in names(pairs[[asn]])) {
-          nm <- paste0("epns.", asn, ".", a, ".", p)
-          rows <- c(rows, list(.make_row(a, "epns", asn, p,
+          nm <- paste0("apns.", asn, ".", a, ".", p)
+          rows <- c(rows, list(.make_row(a, "apns", asn, p,
                                           pairs[[asn]][[p]]$estimate, x, nm)))
         }
       }
     } else {
       for (p in names(pairs)) {
-        nm <- paste0("epns.", x$assumption, ".", a, ".", p)
-        rows <- c(rows, list(.make_row(a, "epns", x$assumption, p,
+        nm <- paste0("apns.", x$assumption, ".", a, ".", p)
+        rows <- c(rows, list(.make_row(a, "apns", x$assumption, p,
                                         pairs[[p]]$estimate, x, nm)))
       }
     }
@@ -208,12 +208,12 @@ as.data.frame.cj_apns <- function(x, ...) {
 
 #' Plot method for cj_apns objects
 #'
-#' Produces a dot-and-whisker plot of EAPNS, EPNS, or AMCE estimates,
+#' Produces a dot-and-whisker plot of MAPNS, APNS, or AMCE estimates,
 #' replicating the style of Figure 2 in Stoetzer & Magazinnik (2026).
 #' Requires \pkg{ggplot2}.
 #'
 #' @param x An object of class `"cj_apns"`.
-#' @param what Which estimand to plot: `"eapns"`, `"epns"`, or `"amce"`.
+#' @param what Which estimand to plot: `"mapns"`, `"apns"`, or `"amce"`.
 #'   Defaults to the estimand stored in `x`.
 #' @param ... Passed to ggplot2 functions.
 #' @return A ggplot2 object (invisibly).
@@ -239,7 +239,7 @@ plot.cj_apns <- function(x, what = NULL, ...) {
 
   gg <- ggplot2::ggplot
 
-  label_col <- if (what == "eapns") "attribute" else "comparison"
+  label_col <- if (what == "mapns") "attribute" else "comparison"
   df$label <- df[[label_col]]
 
   has_ci <- !all(is.na(df$lower))
@@ -264,14 +264,14 @@ plot.cj_apns <- function(x, what = NULL, ...) {
     ggplot2::scale_color_grey() +
     ggplot2::labs(x = "Estimate", y = "",
                   title = switch(what,
-                    eapns = "Expected Avg. Probability of Necessary & Sufficient",
-                    epns = "Expected Probability of Necessary & Sufficient",
+                    mapns = "Expected Avg. Probability of Necessary & Sufficient",
+                    apns = "Expected Probability of Necessary & Sufficient",
                     amce = "Average Marginal Component Effects")) +
     ggplot2::theme_minimal() +
     ggplot2::theme(legend.title = ggplot2::element_blank(),
                    legend.position = "bottom")
 
-  if (!is.null(df$attribute) && length(unique(df$attribute)) > 1 && what != "eapns")
+  if (!is.null(df$attribute) && length(unique(df$attribute)) > 1 && what != "mapns")
     p <- p + ggplot2::facet_wrap(~ attribute, scales = "free_y")
 
   print(p)
