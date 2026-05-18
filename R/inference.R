@@ -12,7 +12,7 @@
 
 #' @keywords internal
 .se_parametric <- function(formula, data, id, id_var, attr_names,
-                           estimand, assumption, preferences, B = 500) {
+                           estimand, assumption, preferences, B = 500, alpha = 0.05) {
 
   pt <- .estimate_point(formula, data, id, id_var, attr_names,
                         estimand, assumption, preferences)
@@ -125,8 +125,7 @@
           vals <- c(vals, abs(get_amce_for_pair(
             sim_result, a, levs[q], levs[p], base)))
         }
-        # See cj_apns.R: unique pairs only, divide by (Dl - 1) not 2*(Dl - 1).
-        eapns_sep_b <- sum(vals) / (Dl - 1)
+        eapns_sep_b <- sum(vals) / (Dl * (Dl - 1) / 2)
       }
 
       eapns_cond_b <- NA_real_
@@ -171,7 +170,7 @@
             }
           }
         }
-        eapns_cond_b <- sum(vals_c) / (Dl - 1)
+        eapns_cond_b <- sum(vals_c) / (Dl * (Dl - 1) / 2)
       }
 
       # Store in boot_mat
@@ -195,8 +194,11 @@
     }
   }
 
-  se_vec <- apply(boot_mat, 2, stats::sd, na.rm = TRUE)
-  list(se = se_vec, point = point_vec)
+  se_vec  <- apply(boot_mat, 2, stats::sd, na.rm = TRUE)
+  # Algorithm 1 (paper): percentile-based CIs from the empirical bootstrap quantiles
+  lower_vec <- apply(boot_mat, 2, stats::quantile, probs = alpha / 2, na.rm = TRUE)
+  upper_vec <- apply(boot_mat, 2, stats::quantile, probs = 1 - alpha / 2, na.rm = TRUE)
+  list(se = se_vec, point = point_vec, lower = lower_vec, upper = upper_vec)
 }
 
 #' Simulate a conditional AMCE from the parametric bootstrap (binary/multilevel)
@@ -328,8 +330,9 @@
         var_abs <- mu^2 + sig^2 - e_abs^2
         var_eapns <- var_eapns + var_abs
       }
-      # EAPNS = sum / (Dl - 1), so Var(EAPNS) = sum(Var) / (Dl-1)^2
-      se_eapns <- sqrt(var_eapns) / (Dl - 1)
+      # EAPNS = sum / n_pairs, so Var(EAPNS) = sum(Var) / n_pairs^2
+      n_pairs_fn <- Dl * (Dl - 1) / 2
+      se_eapns <- sqrt(var_eapns) / n_pairs_fn
       nm <- paste0("eapns.separability.", a)
       if (nm %in% names(se_vec)) se_vec[nm] <- se_eapns
     }
@@ -377,7 +380,7 @@
         var_eapns_c <- var_eapns_c + var_epns_pair
       }
       Dl <- length(levs)
-      se_eapns_c <- sqrt(var_eapns_c) / (Dl - 1)
+      se_eapns_c <- sqrt(var_eapns_c) / (Dl * (Dl - 1) / 2)
       nm <- paste0("eapns.conditional.", a)
       if (nm %in% names(se_vec)) se_vec[nm] <- se_eapns_c
     }

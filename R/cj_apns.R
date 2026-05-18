@@ -127,7 +127,7 @@ cj_apns <- function(formula, data, id,
   if (se != "none") {
     se_result <- switch(se,
       parametric   = .se_parametric(formula, data, id, id_var, attr_names,
-                                     estimand, assumption, preferences, B),
+                                     estimand, assumption, preferences, B, alpha),
       bootstrap    = .se_bootstrap(formula, data, id, id_var, attr_names,
                                     estimand, assumption, preferences, B),
       folded_normal = .se_folded_normal(pt, assumption),
@@ -135,14 +135,27 @@ cj_apns <- function(formula, data, id,
                                     estimand, assumption, preferences)
     )
     se_detail <- se_result$se
-    ci <- data.frame(
-      parameter = names(se_detail),
-      estimate = se_result$point[names(se_detail)],
-      se = se_detail,
-      lower = se_result$point[names(se_detail)] - stats::qnorm(1 - alpha/2) * se_detail,
-      upper = se_result$point[names(se_detail)] + stats::qnorm(1 - alpha/2) * se_detail,
-      row.names = NULL, stringsAsFactors = FALSE
-    )
+    # Parametric bootstrap uses percentile CIs (Algorithm 1 in paper); all
+    # other methods fall back to normal-based CIs from the estimated SE.
+    if (se == "parametric" && !is.null(se_result$lower)) {
+      ci <- data.frame(
+        parameter = names(se_detail),
+        estimate = se_result$point[names(se_detail)],
+        se = se_detail,
+        lower = se_result$lower[names(se_detail)],
+        upper = se_result$upper[names(se_detail)],
+        row.names = NULL, stringsAsFactors = FALSE
+      )
+    } else {
+      ci <- data.frame(
+        parameter = names(se_detail),
+        estimate = se_result$point[names(se_detail)],
+        se = se_detail,
+        lower = se_result$point[names(se_detail)] - stats::qnorm(1 - alpha/2) * se_detail,
+        upper = se_result$point[names(se_detail)] + stats::qnorm(1 - alpha/2) * se_detail,
+        row.names = NULL, stringsAsFactors = FALSE
+      )
+    }
   }
 
   structure(
@@ -194,10 +207,8 @@ cj_apns <- function(formula, data, id,
         epns_sep[[pair]] <- list(tq = levs[q], tp = levs[p],
                                  estimate = val, assumption = "separability")
       }
-      # Iterates over unique pairs (q < p) and divides by (Dl - 1), not 2*(Dl - 1).
-      # Eq. 22 in the paper uses the full double sum over ordered pairs divided by
-      # 2*(Dl - 1); the two formulations are algebraically identical.
-      eapns_sep <- sum(sapply(epns_sep, `[[`, "estimate")) / (Dl - 1)
+      # Paper Eq. (10): MAPNS = [2/(Dl*(Dl-1))] * sum_{unique pairs} APNS = avg over unique pairs
+      eapns_sep <- sum(sapply(epns_sep, `[[`, "estimate")) / (Dl * (Dl - 1) / 2)
     }
 
     # ── conditional separable monotonicity ──────────────────────────────
@@ -250,7 +261,7 @@ cj_apns <- function(formula, data, id,
         if (length(epns_cond) == 0) {
           do_cond_a <- FALSE
         } else {
-          eapns_cond <- sum(sapply(epns_cond, `[[`, "estimate")) / (Dl - 1)
+          eapns_cond <- sum(sapply(epns_cond, `[[`, "estimate")) / (Dl * (Dl - 1) / 2)
           # store pair-specific π as a named vector
           pi_hat[[a]] <- stats::setNames(sapply(acmce_a, `[[`, "pi"), names(acmce_a))
           acmce[[a]]  <- acmce_a
@@ -298,7 +309,7 @@ cj_apns <- function(formula, data, id,
                 estimate = sum(pi_vals * abs(grp_amces)), assumption = "conditional")
               acmce_a[[pair]] <- list(groups = grp_amces, pi = pi_vals)
             }
-            eapns_cond <- sum(sapply(epns_cond, `[[`, "estimate")) / (Dl - 1)
+            eapns_cond <- sum(sapply(epns_cond, `[[`, "estimate")) / (Dl * (Dl - 1) / 2)
             pi_hat[[a]] <- pi_vals; acmce[[a]] <- acmce_a
           } else {
             pi_val   <- mean(dm$.pg, na.rm = TRUE)
@@ -316,7 +327,7 @@ cj_apns <- function(formula, data, id,
                 assumption = "conditional")
               acmce_a[[pair]] <- list(pro = v_pro, con = v_con, pi = pi_val)
             }
-            eapns_cond <- sum(sapply(epns_cond, `[[`, "estimate")) / (Dl - 1)
+            eapns_cond <- sum(sapply(epns_cond, `[[`, "estimate")) / (Dl * (Dl - 1) / 2)
             pi_hat[[a]] <- pi_val; acmce[[a]] <- acmce_a
           }
         }
