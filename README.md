@@ -34,15 +34,17 @@ names(pref_dat) <- gsub("^Att_", "", names(pref_dat))
 prefs <- make_preferences(pref_dat, id = ~ ResponseId, type = "binary")
 
 # ── 2. Estimate MAPNS under both assumptions ─────────────────────────
+#    tasks = ~ time restricts AMCEs to informative tasks (Definition 3)
 
 res <- cj_apns(
   vote ~ borders + eurobonds + immucard + schools + tracingapp,
-  data      = cnj_cand,
-  id        = ~ ResponseId,
-  assumption = "both",
+  data        = cnj_cand,
+  id          = ~ ResponseId,
+  tasks       = ~ time,
+  assumption  = "both",
   preferences = prefs,
-  se         = "parametric",
-  B          = 500
+  se          = "parametric",
+  B           = 500
 )
 
 # View results
@@ -83,11 +85,30 @@ ggplot(df_mapns, aes(x = reorder(attribute, estimate), y = estimate,
 | `plot()` | Dot-and-whisker plot (requires ggplot2) |
 | `as.data.frame()` | Tidy export for custom plots |
 
+## Informative task filtering
+
+By default `cj_apns()` restricts AMCE estimation to *informative tasks* (Definition 3 in the paper): for each level pair (tq, tp), only tasks where exactly one profile shows tq and all remaining profiles show tp (or vice versa) are used. This is required for Proposition 1 to apply.
+
+Supply the task-number variable via the `tasks` argument:
+
+```r
+res <- cj_apns(formula, data = dat, id = ~ id, tasks = ~ time)
+```
+
+To use all tasks instead (e.g. for comparison):
+
+```r
+res_all <- cj_apns(formula, data = dat, id = ~ id,
+                   tasks = ~ time, informative = "all")
+```
+
+If `informative = "informative"` (the default) but `tasks` is not supplied, the function falls back to `"all"` with a warning.
+
 ## Standard error methods
 
 | Method | `se =` | Description |
 |--------|--------|-------------|
-| Parametric bootstrap | `"parametric"` (default) | Resamples AMCEs from N(est, se²), applies plugin. Fast. |
+| Parametric bootstrap | `"parametric"` (default) | Resamples AMCEs from N(est, se²), applies plugin; CIs from empirical quantiles of bootstrap draws (Algorithm 1). |
 | Nonparametric bootstrap | `"bootstrap"` | Resamples respondents, re-estimates full pipeline. |
 | Folded normal | `"folded_normal"` | Analytical SE from the folded normal distribution of \|AMCE\|. |
 | Jackknife | `"jackknife"` | Leave-one-respondent-out. Exact but slow for large N. |
