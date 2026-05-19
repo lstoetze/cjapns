@@ -22,7 +22,7 @@ License: MIT + file LICENSE
 URL: https://github.com/lstoetze/cjapns
 BugReports: https://github.com/lstoetze/cjapns/issues
 Encoding: UTF-8
-LazyData: false
+LazyData: true
 RoxygenNote: 7.3.3
 Depends: R (>= 3.5.0)
 Imports: stats
