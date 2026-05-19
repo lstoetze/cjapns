@@ -16,6 +16,7 @@ cj_apns(
   alpha = 0.05,
   tasks = NULL,
   informative = c("informative", "all"),
+  profile = NULL,
   design = "uniform"
 )
 }
@@ -72,6 +73,11 @@ all J-1 remaining profiles show tp (or vice versa), per Definition 3 in
 the paper. Requires \code{tasks} to be specified; falls back to
 \code{"all"} with a warning if \code{tasks} is not provided.}
 
+\item{profile}{A one-sided formula for the profile indicator variable
+(e.g., \code{~ profile}). When provided, informative task detection
+compares profile \code{"a"} vs profile \code{"b"} attribute values
+explicitly rather than counting levels within a task.}
+
 \item{design}{Either \code{"uniform"} (default) or an object from
 \code{make_design}.}
 }
@@ -96,18 +102,19 @@ data(cnj_cand)
 
 # --- MAPNS on informative tasks (default), no SEs ---
 res <- cj_apns(vote ~ borders + eurobonds + immucard + schools,
-               data = cnj_cand, id = ~ ResponseId, tasks = ~ time,
-               se = "none")
+               data = cnj_cand, id = ~ ResponseId,
+               tasks = ~ time, profile = ~ profile, se = "none")
 res
 
 # --- MAPNS on all tasks ---
 res_all <- cj_apns(vote ~ borders + eurobonds + immucard + schools,
                    data = cnj_cand, id = ~ ResponseId, tasks = ~ time,
-                   informative = "all", se = "none")
+                   profile = ~ profile, informative = "all", se = "none")
 
 # --- With parametric bootstrap SEs (default) ---
 res_pb <- cj_apns(vote ~ borders + eurobonds + immucard + schools,
-                  data = cnj_cand, id = ~ ResponseId, tasks = ~ time)
+                  data = cnj_cand, id = ~ ResponseId,
+                  tasks = ~ time, profile = ~ profile)
 summary(res_pb)
 
 # --- Conditional separable monotonicity ---
@@ -120,6 +127,7 @@ prefs <- make_preferences(pref_dat, id = ~ ResponseId, type = "binary")
 res_cond <- cj_apns(
   vote ~ borders + eurobonds + immucard + schools,
   data = cnj_cand, id = ~ ResponseId,
+  tasks = ~ time, profile = ~ profile,
   assumption = "both", preferences = prefs,
   se = "parametric", B = 500
 )

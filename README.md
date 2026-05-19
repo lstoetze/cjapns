@@ -41,6 +41,7 @@ res <- cj_apns(
   data        = cnj_cand,
   id          = ~ ResponseId,
   tasks       = ~ time,
+  profile     = ~ profile,
   assumption  = "both",
   preferences = prefs,
   se          = "parametric",
@@ -89,17 +90,17 @@ ggplot(df_mapns, aes(x = reorder(attribute, estimate), y = estimate,
 
 By default `cj_apns()` restricts AMCE estimation to *informative tasks* (Definition 3 in the paper): for each level pair (tq, tp), only tasks where exactly one profile shows tq and all remaining profiles show tp (or vice versa) are used. This is required for Proposition 1 to apply.
 
-Supply the task-number variable via the `tasks` argument:
+Supply the task-number and profile variables:
 
 ```r
-res <- cj_apns(formula, data = dat, id = ~ id, tasks = ~ time)
+res <- cj_apns(formula, data = dat, id = ~ id, tasks = ~ time, profile = ~ profile)
 ```
 
 To use all tasks instead (e.g. for comparison):
 
 ```r
 res_all <- cj_apns(formula, data = dat, id = ~ id,
-                   tasks = ~ time, informative = "all")
+                   tasks = ~ time, profile = ~ profile, informative = "all")
 ```
 
 If `informative = "informative"` (the default) but `tasks` is not supplied, the function falls back to `"all"` with a warning.

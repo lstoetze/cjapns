@@ -12,11 +12,15 @@
 #'   Required when `informative = "informative"`.
 #' @param informative Whether to restrict to informative tasks (`"informative"`)
 #'   or use all tasks (`"all"`, default). See `.filter_informative`.
+#' @param profile_var Character name of the profile indicator variable
+#'   (e.g., `"profile"`). When provided, informative task detection compares
+#'   profiles explicitly rather than counting levels.
 #' @return A list with elements `amce` (per-attribute estimates),
 #'   `coefficients`, `se`, `attributes`.
 #' @keywords internal
 estimate_amce <- function(formula, data, id = NULL, task_var = NULL,
-                          informative = c("all", "informative")) {
+                          informative = c("all", "informative"),
+                          profile_var = NULL) {
   informative <- match.arg(informative)
 
   tt <- stats::terms(formula, data = data)
@@ -36,7 +40,10 @@ estimate_amce <- function(formula, data, id = NULL, task_var = NULL,
 
   id_var <- if (!is.null(id)) all.vars(id) else NULL
   do_filter <- informative == "informative" && !is.null(task_var) && !is.null(id_var)
-  if (do_filter) task_key <- paste(data[[id_var]], data[[task_var]], sep = ":::")
+  if (do_filter) {
+    task_key    <- paste(data[[id_var]], data[[task_var]], sep = ":::")
+    profile_vals <- if (!is.null(profile_var)) data[[profile_var]] else NULL
+  }
 
   amce_list <- list()
   all_beta <- c()
@@ -50,7 +57,7 @@ estimate_amce <- function(formula, data, id = NULL, task_var = NULL,
 
     for (lev in levs[-1]) {
       if (do_filter) {
-        keep   <- .filter_informative(data[[a]], task_key, lev, base_level)
+        keep   <- .filter_informative(data[[a]], task_key, lev, base_level, profile_vals)
         d_pair <- data[keep, , drop = FALSE]
       } else {
         d_pair <- data
@@ -98,16 +105,34 @@ estimate_amce <- function(formula, data, id = NULL, task_var = NULL,
 #' A task is informative for pair (tq, tp) if exactly one profile shows tq and
 #' all J-1 remaining profiles show tp, or vice versa.
 #'
+#' When `profile_vals` is provided the check compares the two profiles
+#' explicitly (profile a vs profile b). Otherwise falls back to counting levels
+#' within the task, which generalises to J > 2.
+#'
 #' @param attr_vals Attribute column from the data (vector).
 #' @param task_key Character vector identifying each task (respondent x task).
 #' @param tq,tp The two levels being compared.
+#' @param profile_vals Optional profile indicator vector (e.g. "a"/"b").
 #' @return Logical vector of length `length(attr_vals)`, TRUE for rows in
 #'   informative tasks.
 #' @keywords internal
-.filter_informative <- function(attr_vals, task_key, tq, tp) {
-  a_char   <- as.character(attr_vals)
-  tq_c     <- as.character(tq)
-  tp_c     <- as.character(tp)
+.filter_informative <- function(attr_vals, task_key, tq, tp, profile_vals = NULL) {
+  a_char <- as.character(attr_vals)
+  tq_c   <- as.character(tq)
+  tp_c   <- as.character(tp)
+
+  if (!is.null(profile_vals)) {
+    prof_char <- as.character(profile_vals)
+    prof_levs <- sort(unique(prof_char))
+    val_mat   <- tapply(a_char, list(task_key, prof_char), function(x) x[1])
+    p1 <- val_mat[, prof_levs[1]]
+    p2 <- val_mat[, prof_levs[2]]
+    is_inf <- (!is.na(p1) & !is.na(p2)) &
+              ((p1 == tq_c & p2 == tp_c) | (p1 == tp_c & p2 == tq_c))
+    return(task_key %in% names(is_inf)[is_inf])
+  }
+
+  # Count-based fallback: works for any J
   task_n   <- tapply(rep(1L, length(a_char)), task_key, sum)
   task_ntq <- tapply(a_char == tq_c, task_key, sum)
   task_ntp <- tapply(a_char == tp_c, task_key, sum)
