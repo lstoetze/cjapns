@@ -8,10 +8,16 @@
 #' @param data A data.frame in long format (one row per profile).
 #' @param id A one-sided formula for the respondent ID (e.g., `~ ResponseId`).
 #'   Used for cluster-robust standard errors.
+#' @param task_var Character name of the task-number variable (e.g., `"time"`).
+#'   Required when `informative = "informative"`.
+#' @param informative Whether to restrict to informative tasks (`"informative"`)
+#'   or use all tasks (`"all"`, default). See `.filter_informative`.
 #' @return A list with elements `amce` (per-attribute estimates),
 #'   `coefficients`, `se`, `attributes`.
 #' @keywords internal
-estimate_amce <- function(formula, data, id = NULL) {
+estimate_amce <- function(formula, data, id = NULL, task_var = NULL,
+                          informative = c("all", "informative")) {
+  informative <- match.arg(informative)
 
   tt <- stats::terms(formula, data = data)
   outcome_var <- all.vars(formula)[1]
@@ -28,7 +34,10 @@ estimate_amce <- function(formula, data, id = NULL) {
     if (!is.factor(data[[a]])) data[[a]] <- as.factor(data[[a]])
   }
 
-  Y <- data[[outcome_var]]
+  id_var <- if (!is.null(id)) all.vars(id) else NULL
+  do_filter <- informative == "informative" && !is.null(task_var) && !is.null(id_var)
+  if (do_filter) task_key <- paste(data[[id_var]], data[[task_var]], sep = ":::")
+
   amce_list <- list()
   all_beta <- c()
   all_se <- c()
@@ -40,22 +49,37 @@ estimate_amce <- function(formula, data, id = NULL) {
     a_se <- c()
 
     for (lev in levs[-1]) {
-      idx_tq <- which(data[[a]] == lev)
-      idx_tp <- which(data[[a]] == base_level)
-      amce_val <- mean(Y[idx_tq], na.rm = TRUE) - mean(Y[idx_tp], na.rm = TRUE)
-
-      if (!is.null(id)) {
-        id_var <- all.vars(id)
-        se_val <- .cluster_se_dim(Y, data[[a]], lev, base_level, data[[id_var]])
+      if (do_filter) {
+        keep   <- .filter_informative(data[[a]], task_key, lev, base_level)
+        d_pair <- data[keep, , drop = FALSE]
       } else {
-        se_val <- sqrt(var(Y[idx_tq], na.rm = TRUE) / length(idx_tq) +
-                       var(Y[idx_tp], na.rm = TRUE) / length(idx_tp))
+        d_pair <- data
+      }
+      Y_pair <- d_pair[[outcome_var]]
+      idx_tq <- which(d_pair[[a]] == lev)
+      idx_tp <- which(d_pair[[a]] == base_level)
+
+      if (length(idx_tq) == 0 || length(idx_tp) == 0) {
+        a_coefs[lev] <- NA_real_
+        a_se[lev]    <- NA_real_
+        all_beta[paste0(a, lev)] <- NA_real_
+        all_se[paste0(a, lev)]   <- NA_real_
+        next
+      }
+
+      amce_val <- mean(Y_pair[idx_tq], na.rm = TRUE) - mean(Y_pair[idx_tp], na.rm = TRUE)
+
+      if (!is.null(id_var)) {
+        se_val <- .cluster_se_dim(Y_pair, d_pair[[a]], lev, base_level, d_pair[[id_var]])
+      } else {
+        se_val <- sqrt(var(Y_pair[idx_tq], na.rm = TRUE) / length(idx_tq) +
+                       var(Y_pair[idx_tp], na.rm = TRUE) / length(idx_tp))
       }
 
       a_coefs[lev] <- amce_val
-      a_se[lev] <- se_val
+      a_se[lev]    <- se_val
       all_beta[paste0(a, lev)] <- amce_val
-      all_se[paste0(a, lev)] <- se_val
+      all_se[paste0(a, lev)]   <- se_val
     }
 
     amce_list[[a]] <- list(
@@ -66,6 +90,30 @@ estimate_amce <- function(formula, data, id = NULL) {
 
   list(coefficients = all_beta, se = all_se, formula = formula,
        attributes = attributes_info, amce = amce_list)
+}
+
+
+#' Filter rows to informative tasks for a level pair (Definition 3 in paper)
+#'
+#' A task is informative for pair (tq, tp) if exactly one profile shows tq and
+#' all J-1 remaining profiles show tp, or vice versa.
+#'
+#' @param attr_vals Attribute column from the data (vector).
+#' @param task_key Character vector identifying each task (respondent x task).
+#' @param tq,tp The two levels being compared.
+#' @return Logical vector of length `length(attr_vals)`, TRUE for rows in
+#'   informative tasks.
+#' @keywords internal
+.filter_informative <- function(attr_vals, task_key, tq, tp) {
+  a_char   <- as.character(attr_vals)
+  tq_c     <- as.character(tq)
+  tp_c     <- as.character(tp)
+  task_n   <- tapply(rep(1L, length(a_char)), task_key, sum)
+  task_ntq <- tapply(a_char == tq_c, task_key, sum)
+  task_ntp <- tapply(a_char == tp_c, task_key, sum)
+  is_inf   <- (task_ntq == 1L & task_ntp == (task_n - 1L)) |
+              (task_ntp == 1L & task_ntq == (task_n - 1L))
+  task_key %in% names(is_inf)[is_inf]
 }
 
 

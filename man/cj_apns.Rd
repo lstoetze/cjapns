@@ -14,6 +14,8 @@ cj_apns(
   se = c("parametric", "none", "bootstrap", "folded_normal", "jackknife"),
   B = 500,
   alpha = 0.05,
+  tasks = NULL,
+  informative = c("informative", "all"),
   design = "uniform"
 )
 }
@@ -60,6 +62,16 @@ contain the outcome, attribute columns, and a respondent identifier.}
 
 \item{alpha}{Significance level for confidence intervals. Default 0.05.}
 
+\item{tasks}{A one-sided formula for the task-number variable
+(e.g., \code{~ time}). Required when \code{informative = "informative"}.}
+
+\item{informative}{Whether to restrict AMCE estimation to informative tasks
+only (\code{"informative"}, default) or use all tasks (\code{"all"}).
+Informative tasks are those where exactly one profile shows level tq and
+all J-1 remaining profiles show tp (or vice versa), per Definition 3 in
+the paper. Requires \code{tasks} to be specified; falls back to
+\code{"all"} with a warning if \code{tasks} is not provided.}
+
 \item{design}{Either \code{"uniform"} (default) or an object from
 \code{make_design}.}
 }
@@ -82,14 +94,20 @@ with multiple options for inference.
 \dontrun{
 data(cnj_cand)
 
-# --- MAPNS under separable monotonicity, no SEs ---
+# --- MAPNS on informative tasks (default), no SEs ---
 res <- cj_apns(vote ~ borders + eurobonds + immucard + schools,
-               data = cnj_cand, id = ~ ResponseId, se = "none")
+               data = cnj_cand, id = ~ ResponseId, tasks = ~ time,
+               se = "none")
 res
+
+# --- MAPNS on all tasks ---
+res_all <- cj_apns(vote ~ borders + eurobonds + immucard + schools,
+                   data = cnj_cand, id = ~ ResponseId, tasks = ~ time,
+                   informative = "all", se = "none")
 
 # --- With parametric bootstrap SEs (default) ---
 res_pb <- cj_apns(vote ~ borders + eurobonds + immucard + schools,
-                  data = cnj_cand, id = ~ ResponseId)
+                  data = cnj_cand, id = ~ ResponseId, tasks = ~ time)
 summary(res_pb)
 
 # --- Conditional separable monotonicity ---

@@ -12,10 +12,11 @@
 
 #' @keywords internal
 .se_parametric <- function(formula, data, id, id_var, attr_names,
-                           estimand, assumption, preferences, B = 500, alpha = 0.05) {
+                           estimand, assumption, preferences, B = 500, alpha = 0.05,
+                           task_var = NULL, informative = "all") {
 
   pt <- .estimate_point(formula, data, id, id_var, attr_names,
-                        estimand, assumption, preferences)
+                        estimand, assumption, preferences, task_var, informative)
   point_vec <- .flatten_estimates(pt, estimand, assumption, attr_names)
 
   attributes_info <- pt$attributes
@@ -53,7 +54,8 @@
           for (grp in c(1L, 0L)) {
             sub <- data[!is.na(pg) & pg == grp, , drop = FALSE]
             if (nrow(sub) == 0) next
-            res <- estimate_amce(formula, sub, id = id)
+            res <- estimate_amce(formula, sub, id = id,
+                                 task_var = task_var, informative = informative)
             if (!a %in% names(res$amce)) next
             for (lev in names(res$amce[[a]]$estimate)) {
               key <- .make_rank_key(a, lev, tq, tp, grp)
@@ -77,7 +79,8 @@
         for (grp in pref_groups) {
           sub <- dm[dm$.pg == grp, ]
           if (nrow(sub) == 0) next
-          res <- estimate_amce(formula, sub, id = id)
+          res <- estimate_amce(formula, sub, id = id,
+                               task_var = task_var, informative = informative)
           for (lev in names(res$amce[[a]]$estimate)) {
             key <- paste0(a, ".", lev, ".grp.", grp)
             cond_amce_info[[key]] <- list(
@@ -242,10 +245,11 @@
 
 #' @keywords internal
 .se_bootstrap <- function(formula, data, id, id_var, attr_names,
-                          estimand, assumption, preferences, B = 500) {
+                          estimand, assumption, preferences, B = 500,
+                          task_var = NULL, informative = "all") {
 
   pt <- .estimate_point(formula, data, id, id_var, attr_names,
-                        estimand, assumption, preferences)
+                        estimand, assumption, preferences, task_var, informative)
   point_vec <- .flatten_estimates(pt, estimand, assumption, attr_names)
 
   unique_ids <- unique(data[[id_var]])
@@ -270,7 +274,7 @@
     bid <- stats::reformulate(id_var, response = NULL)
     tryCatch({
       est <- .estimate_point(formula, bd, bid, id_var, attr_names,
-                             estimand, assumption, bp)
+                             estimand, assumption, bp, task_var, informative)
       boot_ests[[b]] <- .flatten_estimates(est, estimand, assumption, attr_names)
     }, error = function(e) { boot_ests[[b]] <<- NULL })
   }
@@ -401,10 +405,11 @@
 
 #' @keywords internal
 .se_jackknife <- function(formula, data, id, id_var, attr_names,
-                          estimand, assumption, preferences) {
+                          estimand, assumption, preferences,
+                          task_var = NULL, informative = "all") {
 
   pt <- .estimate_point(formula, data, id, id_var, attr_names,
-                        estimand, assumption, preferences)
+                        estimand, assumption, preferences, task_var, informative)
   point_vec <- .flatten_estimates(pt, estimand, assumption, attr_names)
 
   unique_ids <- unique(data[[id_var]])
@@ -420,7 +425,7 @@
     }
     tryCatch({
       est <- .estimate_point(formula, d_i, id, id_var, attr_names,
-                             estimand, assumption, p_i)
+                             estimand, assumption, p_i, task_var, informative)
       jack_ests[[i]] <- .flatten_estimates(est, estimand, assumption, attr_names)
     }, error = function(e) { jack_ests[[i]] <<- NULL })
   }

@@ -38,6 +38,14 @@
 #' @param B Number of replications for `se = "parametric"` or
 #'   `se = "bootstrap"`. Default 500.
 #' @param alpha Significance level for confidence intervals. Default 0.05.
+#' @param tasks A one-sided formula for the task-number variable
+#'   (e.g., `~ time`). Required when `informative = "informative"`.
+#' @param informative Whether to restrict AMCE estimation to informative tasks
+#'   only (`"informative"`, default) or use all tasks (`"all"`). Informative
+#'   tasks are those where exactly one profile shows level tq and all J-1
+#'   remaining profiles show tp (or vice versa), per Definition 3 in the paper.
+#'   Requires `tasks` to be specified; falls back to `"all"` with a warning if
+#'   `tasks` is not provided.
 #' @param design Either \code{"uniform"} (default) or an object from
 #'   \code{make_design}.
 #'
@@ -60,14 +68,20 @@
 #' \dontrun{
 #' data(cnj_cand)
 #'
-#' # --- MAPNS under separable monotonicity, no SEs ---
+#' # --- MAPNS on informative tasks (default), no SEs ---
 #' res <- cj_apns(vote ~ borders + eurobonds + immucard + schools,
-#'                data = cnj_cand, id = ~ ResponseId, se = "none")
+#'                data = cnj_cand, id = ~ ResponseId, tasks = ~ time,
+#'                se = "none")
 #' res
+#'
+#' # --- MAPNS on all tasks ---
+#' res_all <- cj_apns(vote ~ borders + eurobonds + immucard + schools,
+#'                    data = cnj_cand, id = ~ ResponseId, tasks = ~ time,
+#'                    informative = "all", se = "none")
 #'
 #' # --- With parametric bootstrap SEs (default) ---
 #' res_pb <- cj_apns(vote ~ borders + eurobonds + immucard + schools,
-#'                   data = cnj_cand, id = ~ ResponseId)
+#'                   data = cnj_cand, id = ~ ResponseId, tasks = ~ time)
 #' summary(res_pb)
 #'
 #' # --- Conditional separable monotonicity ---
@@ -95,17 +109,29 @@ cj_apns <- function(formula, data, id,
                      se = c("parametric", "none", "bootstrap",
                             "folded_normal", "jackknife"),
                      B = 500, alpha = 0.05,
+                     tasks = NULL,
+                     informative = c("informative", "all"),
                      design = "uniform") {
 
   cl <- match.call()
   estimand <- match.arg(estimand)
   assumption <- match.arg(assumption)
   se <- match.arg(se)
+  informative <- match.arg(informative)
 
   # ---- validation -------------------------------------------------------
   if (missing(id)) stop("'id' must be specified (e.g., id = ~ ResponseId).")
   id_var <- all.vars(id)
   stopifnot(length(id_var) == 1, id_var %in% names(data))
+
+  if (informative == "informative" && is.null(tasks)) {
+    warning("'informative = \"informative\"' requires 'tasks' to be specified. ",
+            "Falling back to 'informative = \"all\"'.")
+    informative <- "all"
+  }
+  task_var <- if (!is.null(tasks)) all.vars(tasks)[1] else NULL
+  if (!is.null(task_var))
+    stopifnot("'tasks' variable not found in data" = task_var %in% names(data))
 
   if (assumption %in% c("conditional", "both") && is.null(preferences))
     stop("'preferences' must be provided for assumption = \"", assumption,
@@ -119,7 +145,7 @@ cj_apns <- function(formula, data, id,
 
   # ---- point estimates --------------------------------------------------
   pt <- .estimate_point(formula, data, id, id_var, attr_names,
-                        estimand, assumption, preferences)
+                        estimand, assumption, preferences, task_var, informative)
 
   # ---- standard errors --------------------------------------------------
   se_detail <- NULL; ci <- NULL
@@ -127,12 +153,15 @@ cj_apns <- function(formula, data, id,
   if (se != "none") {
     se_result <- switch(se,
       parametric   = .se_parametric(formula, data, id, id_var, attr_names,
-                                     estimand, assumption, preferences, B, alpha),
+                                     estimand, assumption, preferences, B, alpha,
+                                     task_var, informative),
       bootstrap    = .se_bootstrap(formula, data, id, id_var, attr_names,
-                                    estimand, assumption, preferences, B),
+                                    estimand, assumption, preferences, B,
+                                    task_var, informative),
       folded_normal = .se_folded_normal(pt, assumption),
       jackknife    = .se_jackknife(formula, data, id, id_var, attr_names,
-                                    estimand, assumption, preferences)
+                                    estimand, assumption, preferences,
+                                    task_var, informative)
     )
     se_detail <- se_result$se
     # Parametric bootstrap uses percentile CIs (Algorithm 1 in paper); all
@@ -165,6 +194,7 @@ cj_apns <- function(formula, data, id,
          pi_hat = pt$pi_hat, acmce = pt$acmce,
          ci = ci, se_detail = se_detail,
          alpha = alpha, B = B, call = cl,
+         task_var = task_var, informative = informative,
          pref_type = if (!is.null(preferences)) preferences$type else NULL),
     class = "cj_apns"
   )
@@ -177,12 +207,14 @@ cj_apns <- function(formula, data, id,
 
 #' @keywords internal
 .estimate_point <- function(formula, data, id, id_var, attr_names,
-                            estimand, assumption, preferences) {
+                            estimand, assumption, preferences,
+                            task_var = NULL, informative = "all") {
 
   attributes_info <- lapply(attr_names, function(a) levels(data[[a]]))
   names(attributes_info) <- attr_names
 
-  amce_result <- estimate_amce(formula, data, id = id)
+  amce_result <- estimate_amce(formula, data, id = id,
+                               task_var = task_var, informative = informative)
 
   if (estimand == "amce")
     return(list(attributes = attributes_info, amce = amce_result$amce,
@@ -245,11 +277,13 @@ cj_apns <- function(formula, data, id,
           if (!has_pro && !has_con) next
 
           v_pro <- if (has_pro) get_amce_for_pair(
-            estimate_amce(formula, dm[dm$.pg == 1L, ], id = id), a, tq, tp, base
-          ) else 0
+            estimate_amce(formula, dm[dm$.pg == 1L, ], id = id,
+                          task_var = task_var, informative = informative),
+            a, tq, tp, base) else 0
           v_con <- if (has_con) get_amce_for_pair(
-            estimate_amce(formula, dm[dm$.pg == 0L, ], id = id), a, tq, tp, base
-          ) else 0
+            estimate_amce(formula, dm[dm$.pg == 0L, ], id = id,
+                          task_var = task_var, informative = informative),
+            a, tq, tp, base) else 0
 
           apns_cond[[pair]] <- list(tq = tq, tp = tp,
             estimate = pi_val * abs(v_pro) + (1 - pi_val) * abs(v_con),
@@ -291,7 +325,8 @@ cj_apns <- function(formula, data, id,
               lapply(pref_groups, function(g) {
                 sub_dm <- dm[!is.na(dm$.pg) & dm$.pg == g, , drop = FALSE]
                 if (nrow(sub_dm) == 0) return(NULL)
-                estimate_amce(formula, sub_dm, id = id)
+                estimate_amce(formula, sub_dm, id = id,
+                              task_var = task_var, informative = informative)
               }),
               pref_groups
             )
@@ -313,8 +348,10 @@ cj_apns <- function(formula, data, id,
             pi_hat[[a]] <- pi_vals; acmce[[a]] <- acmce_a
           } else {
             pi_val   <- mean(dm$.pg, na.rm = TRUE)
-            amce_pro <- estimate_amce(formula, dm[dm$.pg == 1, ], id = id)
-            amce_con <- estimate_amce(formula, dm[dm$.pg == 0, ], id = id)
+            amce_pro <- estimate_amce(formula, dm[dm$.pg == 1, ], id = id,
+                                      task_var = task_var, informative = informative)
+            amce_con <- estimate_amce(formula, dm[dm$.pg == 0, ], id = id,
+                                      task_var = task_var, informative = informative)
 
             apns_cond <- list(); acmce_a <- list()
             for (q in seq_along(levs)) for (p in seq_along(levs)) {
