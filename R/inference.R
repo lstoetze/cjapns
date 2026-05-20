@@ -201,15 +201,9 @@
   }
 
   se_vec  <- apply(boot_mat, 2, stats::sd, na.rm = TRUE)
-  # Percentile CIs (commented out): do not cover the point estimate for MAPNS
-  # when effects are near zero, because E[|X|] > |E[X]| shifts the bootstrap
-  # distribution above the estimate (Jensen's inequality on the absolute value).
-  # lower_vec <- apply(boot_mat, 2, stats::quantile, probs = alpha / 2, na.rm = TRUE)
-  # upper_vec <- apply(boot_mat, 2, stats::quantile, probs = 1 - alpha / 2, na.rm = TRUE)
-  # Normal-approximation CIs centered on the point estimate.
-  z         <- stats::qnorm(1 - alpha / 2)
-  lower_vec <- point_vec - z * se_vec
-  upper_vec <- point_vec + z * se_vec
+  # Algorithm 1 (paper): percentile-based CIs from the empirical bootstrap quantiles
+  lower_vec <- apply(boot_mat, 2, stats::quantile, probs = alpha / 2, na.rm = TRUE)
+  upper_vec <- apply(boot_mat, 2, stats::quantile, probs = 1 - alpha / 2, na.rm = TRUE)
   list(se = se_vec, point = point_vec, lower = lower_vec, upper = upper_vec)
 }
 
