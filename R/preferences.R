@@ -225,21 +225,52 @@ make_preferences <- function(data, id, type = c("binary", "scale", "multilevel",
   id_var <- all.vars(id)
   stopifnot(length(id_var) == 1)
 
-  # ── ranking type: data must be a cj_rank_data object ─────────────────────
+  # ── ranking type ──────────────────────────────────────────────────────────
+  # Accepts either:
+  #   (a) a cj_rank_data object from tidy_ranking_data() — full rankings are
+  #       reduced to the (top, bottom) extreme pair per respondent per attribute;
+  #   (b) a plain data frame with <attr>_top and <attr>_bot columns, one row
+  #       per respondent — the minimal format when only the best and worst level
+  #       per attribute are known (or have been pre-extracted from a ranking).
+  # In both cases preferences$data ends up with the same <attr>_top / <attr>_bot
+  # column structure, matching the binary format (one column per attribute, same
+  # data frame).
   if (type == "ranking") {
-    if (!inherits(data, "cj_rank_data"))
-      stop("For type = \"ranking\", 'data' must be a \"cj_rank_data\" object ",
-           "produced by tidy_ranking_data().")
-    if (data$id_var != id_var)
-      stop("The id variable in the cj_rank_data object ('", data$id_var,
-           "') does not match the id formula ('", id_var, "').")
-
-    out        <- data.frame(data$rank_data[[1]][[id_var]], stringsAsFactors = FALSE)
-    names(out) <- id_var
-
+    if (inherits(data, "cj_rank_data")) {
+      if (data$id_var != id_var)
+        stop("The id variable in the cj_rank_data object ('", data$id_var,
+             "') does not match the id formula ('", id_var, "').")
+      attr_names <- data$attributes
+      out        <- data.frame(
+        as.character(data$rank_data[[attr_names[1]]][[id_var]]),
+        stringsAsFactors = FALSE)
+      names(out) <- id_var
+      for (a in attr_names) {
+        rd         <- data$rank_data[[a]]
+        level_cols <- setdiff(names(rd), id_var)
+        rank_sub   <- rd[, level_cols, drop = FALSE]
+        out[[paste0(a, "_top")]] <- level_cols[apply(rank_sub, 1, which.min)]
+        out[[paste0(a, "_bot")]] <- level_cols[apply(rank_sub, 1, which.max)]
+      }
+    } else {
+      if (!is.data.frame(data))
+        stop("For type = \"ranking\", 'data' must be a \"cj_rank_data\" object ",
+             "or a data frame with '<attr>_top' and '<attr>_bot' columns.")
+      if (!id_var %in% names(data))
+        stop("id variable '", id_var, "' not found in data.")
+      top_cols <- grep("_top$", setdiff(names(data), id_var), value = TRUE)
+      if (length(top_cols) == 0)
+        stop("No '_top' columns found. For type = \"ranking\" with a plain ",
+             "data frame, name columns '<attr>_top' and '<attr>_bot'.")
+      attr_names <- sub("_top$", "", top_cols)
+      missing_bot <- setdiff(paste0(attr_names, "_bot"), names(data))
+      if (length(missing_bot) > 0)
+        stop("Missing '_bot' column(s) for attribute(s): ",
+             paste(sub("_bot$", "", missing_bot), collapse = ", "))
+      out <- data
+    }
     return(structure(
-      list(data = out, id_var = id_var, attributes = data$attributes,
-           type = "ranking", rank_data = data$rank_data),
+      list(data = out, id_var = id_var, attributes = attr_names, type = "ranking"),
       class = "cj_preferences"
     ))
   }
@@ -293,13 +324,12 @@ print.cj_preferences <- function(x, ...) {
   cat("  Type:       ", x$type, "\n")
   if (x$type == "ranking") {
     for (a in x$attributes) {
-      rd         <- x$rank_data[[a]]
-      level_cols <- setdiff(names(rd), x$id_var)
-      mean_ranks <- sapply(level_cols, function(lc) mean(rd[[lc]], na.rm = TRUE))
-      cat("    ", a, ": ", length(level_cols), " levels",
-          " (mean ranks: ",
-          paste(level_cols, round(mean_ranks, 2), sep = " = ", collapse = ", "),
-          ")\n", sep = "")
+      top_vals <- x$data[[paste0(a, "_top")]]
+      bot_vals <- x$data[[paste0(a, "_bot")]]
+      ep_tbl   <- table(paste0(top_vals, " vs ", bot_vals), useNA = "no")
+      cat("    ", a, " (top vs bottom):\n", sep = "")
+      for (ep in names(ep_tbl))
+        cat(sprintf("      %-45s n = %d\n", ep, ep_tbl[[ep]]))
     }
   } else {
     for (a in x$attributes) {
