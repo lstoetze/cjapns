@@ -255,8 +255,8 @@ cj_apns <- function(formula, data, id,
         apns_sep[[pair]] <- list(tq = levs[q], tp = levs[p],
                                  estimate = val, assumption = "separability")
       }
-      # Paper Eq. (10): MAPNS = [2/(Dl*(Dl-1))] * sum_{unique pairs} APNS = avg over unique pairs
-      mapns_sep <- sum(sapply(apns_sep, `[[`, "estimate")) / (Dl * (Dl - 1) / 2)
+      # Proposition 3: MAPNS = max over unique pairs of APNS = max |AMCE(tq, tp)|
+      mapns_sep <- max(sapply(apns_sep, `[[`, "estimate"))
     }
 
     # ── conditional separable monotonicity ──────────────────────────────
@@ -291,11 +291,26 @@ cj_apns <- function(formula, data, id,
           dm_g     <- data[data$.pg == 1L, , drop = FALSE]
           if (nrow(dm_g) == 0) next
 
-          v_g <- get_amce_for_pair(
-            estimate_amce(formula, dm_g, id = id,
-                          task_var = task_var, informative = informative,
-                          profile_var = profile_var),
-            a, ep_top, ep_bot, base)
+          # Filter to tasks informative for the (ep_top, ep_bot) pair directly,
+          # using ep_bot as the baseline (Proposition 5). 
+          if (informative == "informative" && !is.null(task_var)) {
+            task_key_g     <- paste(dm_g[[id_var]], dm_g[[task_var]], sep = ":::")
+            profile_vals_g <- if (!is.null(profile_var)) dm_g[[profile_var]] else NULL
+            keep_inf       <- .filter_informative(dm_g[[a]], task_key_g,
+                                                  ep_top, ep_bot, profile_vals_g)
+            dm_inf <- dm_g[keep_inf, , drop = FALSE]
+          } else {
+            dm_inf <- dm_g
+          }
+          if (nrow(dm_inf) == 0) next
+
+          outcome_var <- all.vars(formula)[1]
+          idx_tq <- which(as.character(dm_inf[[a]]) == ep_top)
+          idx_tp <- which(as.character(dm_inf[[a]]) == ep_bot)
+          if (length(idx_tq) == 0 || length(idx_tp) == 0) next
+
+          v_g <- mean(dm_inf[[outcome_var]][idx_tq], na.rm = TRUE) -
+                 mean(dm_inf[[outcome_var]][idx_tp], na.rm = TRUE)
 
           if (is.na(v_g)) next
 

@@ -40,7 +40,9 @@
       if (!a %in% preferences$attributes) next
 
       if (preferences$type == "ranking") {
-        # ranking: look up pre-stored (top, bot) from preferences$data
+        # ranking: store the direct ACMCE estimate and SE for each extreme-pair
+        # group using the same informative-task filter applied to (ep_top, ep_bot)
+        # directly — matching the point estimator in .estimate_point.
         pref_data <- preferences$data[
           !duplicated(preferences$data[[preferences$id_var]]), , drop = FALSE]
         pref_ids  <- as.character(pref_data[[preferences$id_var]])
@@ -49,21 +51,40 @@
         bot_vals  <- as.character(pref_data[[paste0(a, "_bot")]])
         ep_label  <- paste0(top_vals, " vs ", bot_vals)
         ep_row    <- ep_label[match(row_ids, pref_ids)]
+        outcome_var <- all.vars(formula)[1]
 
         unique_eps <- unique(ep_label[!is.na(ep_label)])
         for (ep in unique_eps) {
           sub <- data[!is.na(ep_row) & ep_row == ep, , drop = FALSE]
           if (nrow(sub) == 0) next
-          res <- estimate_amce(formula, sub, id = id,
-                               task_var = task_var, informative = informative,
-                               profile_var = profile_var)
-          if (!a %in% names(res$amce)) next
-          for (lev in names(res$amce[[a]]$estimate)) {
-            key <- .make_ep_key(a, lev, ep)
-            cond_amce_info[[key]] <- list(
-              est = res$amce[[a]]$estimate[lev],
-              se  = res$amce[[a]]$se[lev])
+          parts    <- strsplit(ep, " vs ")[[1]]
+          ep_top_i <- parts[1]
+          ep_bot_i <- parts[2]
+
+          if (informative == "informative" && !is.null(task_var)) {
+            task_key_s     <- paste(sub[[id_var]], sub[[task_var]], sep = ":::")
+            profile_vals_s <- if (!is.null(profile_var)) sub[[profile_var]] else NULL
+            keep_inf       <- .filter_informative(sub[[a]], task_key_s,
+                                                  ep_top_i, ep_bot_i, profile_vals_s)
+            sub_inf <- sub[keep_inf, , drop = FALSE]
+          } else {
+            sub_inf <- sub
           }
+          if (nrow(sub_inf) == 0) next
+
+          Y_inf   <- sub_inf[[outcome_var]]
+          trt_inf <- as.character(sub_inf[[a]])
+          idx_tq  <- which(trt_inf == ep_top_i)
+          idx_tp  <- which(trt_inf == ep_bot_i)
+          if (length(idx_tq) == 0 || length(idx_tp) == 0) next
+
+          est_direct <- mean(Y_inf[idx_tq], na.rm = TRUE) -
+                        mean(Y_inf[idx_tp], na.rm = TRUE)
+          se_direct  <- .cluster_se_dim(Y_inf, trt_inf, ep_top_i, ep_bot_i,
+                                        sub_inf[[id_var]])
+
+          key <- .make_ep_key(a, "direct", ep)
+          cond_amce_info[[key]] <- list(est = est_direct, se = se_direct)
         }
       } else {
         # binary / multilevel: attribute-level groups
@@ -129,7 +150,7 @@
           vals <- c(vals, abs(get_amce_for_pair(
             sim_result, a, levs[q], levs[p], base)))
         }
-        mapns_sep_b <- sum(vals) / (Dl * (Dl - 1) / 2)
+        mapns_sep_b <- max(vals)
       }
 
       mapns_cond_b <- NA_real_
@@ -233,16 +254,10 @@
 #' Simulate a conditional AMCE for a ranking-type extreme-pair group
 #' @keywords internal
 .sim_cond_amce_ep <- function(cond_amce_info, a, tq, tp, base, ep) {
-  .get_sim <- function(lev) {
-    key  <- .make_ep_key(a, lev, ep)
-    info <- cond_amce_info[[key]]
-    if (is.null(info) || is.na(info$se)) return(0)
-    stats::rnorm(1, info$est, info$se)
-  }
-  if (tq == base && tp == base) return(0)
-  if (tq == base) return(-.get_sim(tp))
-  if (tp == base) return(.get_sim(tq))
-  .get_sim(tq) - .get_sim(tp)
+  key  <- .make_ep_key(a, "direct", ep)
+  info <- cond_amce_info[[key]]
+  if (is.null(info) || is.na(info$se)) return(0)
+  stats::rnorm(1, info$est, info$se)
 }
 
 
@@ -321,31 +336,12 @@
       if (nm %in% names(se_vec)) se_vec[nm] <- amce_a$se[lev]
     }
 
-    # Folded normal SE for MAPNS under separability
+    # Folded normal SE for MAPNS under separability is not supported:
+    # MAPNS = max|AMCE| (Proposition 3) and the variance of a max of correlated
+    # normals has no closed form. Use se = "parametric" instead.
     if (do_sep) {
-      var_mapns <- 0
-      n_pairs <- 0
-      for (q in seq_along(levs)) for (p in seq_along(levs)) {
-        if (q >= p) next
-        n_pairs <- n_pairs + 1
-        mu <- get_amce_for_pair(list(amce = pt$amce), a, levs[q], levs[p], base)
-        # SE for this pair: approximate from base-level SEs
-        if (levs[q] == base) {
-          sig <- amce_a$se[levs[p]]
-        } else if (levs[p] == base) {
-          sig <- amce_a$se[levs[q]]
-        } else {
-          sig <- sqrt(amce_a$se[levs[q]]^2 + amce_a$se[levs[p]]^2)
-        }
-        e_abs <- .folded_normal_mean(mu, sig)
-        var_abs <- mu^2 + sig^2 - e_abs^2
-        var_mapns <- var_mapns + var_abs
-      }
-      # MAPNS = sum / n_pairs, so Var(MAPNS) = sum(Var) / n_pairs^2
-      n_pairs_fn <- Dl * (Dl - 1) / 2
-      se_mapns <- sqrt(var_mapns) / n_pairs_fn
       nm <- paste0("mapns.separability.", a)
-      if (nm %in% names(se_vec)) se_vec[nm] <- se_mapns
+      if (nm %in% names(se_vec)) se_vec[nm] <- NA_real_
     }
 
     # For conditional: more complex, use delta method on weighted sum
