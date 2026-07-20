@@ -13,18 +13,27 @@
 #' @param id A one-sided formula for the respondent ID variable
 #'   (e.g., `~ ResponseId`). Required.
 #' @param estimand Which estimand to compute:
-#'   * `"mapns"` (default): Expected Average Probability of Necessary and
-#'     Sufficient conditions, summarising overall attribute relevance.
+#'   * `"mapns"` (default): Maximum Average Probability of Necessary and
+#'     Sufficient conditions, summarising overall attribute relevance. Under
+#'     separability this is the *maximum* |AMCE| across pairwise level
+#'     comparisons (Proposition 3/7); under the conditional/heterogeneous
+#'     assumption it is the group-share-weighted sum of each preference
+#'     group's |ACMCE| at that group's own extreme levels (Proposition 4/8),
+#'     which for attributes with more than two levels requires
+#'     `preferences` of `type = "ranking"` — see `make_preferences()`.
 #'   * `"apns"`: Pairwise Expected Probability of Necessary and Sufficient.
 #'   * `"amce"`: Standard Average Marginal Component Effects only.
 #' @param assumption Identifying assumption:
 #'   * `"separability"` (default): Separable monotonicity. APNS = |AMCE|.
-#'   * `"conditional"`: Conditional separable monotonicity. Requires
-#'     `preferences`.
+#'   * `"conditional"`: Conditional/heterogeneous separable (transitive)
+#'     monotonicity. Requires `preferences`.
 #'   * `"both"`: Estimate under both assumptions for comparison.
 #' @param preferences An object of class \code{"cj_preferences"} created by
 #'   \code{make_preferences}. Required when \code{assumption} is
-#'   \code{"conditional"} or \code{"both"}.
+#'   \code{"conditional"} or \code{"both"}. For MAPNS estimation on
+#'   attributes with more than two levels, must be of `type = "ranking"`;
+#'   other types only identify MAPNS for two-level attributes (pairwise APNS
+#'   is unaffected). See \code{\link{make_preferences}}.
 #' @param se Method for standard error estimation:
 #'   * `"none"`: No standard errors (fastest).
 #'   * `"parametric"` (default): Parametric bootstrap — resamples AMCEs
@@ -50,8 +59,17 @@
 #'   (e.g., `~ profile`). When provided, informative task detection compares
 #'   profile "a" vs profile "b" attribute values explicitly rather than
 #'   counting levels within a task.
-#' @param design Either \code{"uniform"} (default) or an object from
-#'   \code{make_design}.
+#' @param design Either \code{"uniform"} (default) or a \code{"cj_design"}
+#'   object from \code{\link{make_design}}. Under \code{"uniform"}, every
+#'   estimator is the simple pooled difference-in-means (Corollary "Pooled
+#'   Estimation under Full Randomization"), unchanged from context-free
+#'   estimation. When a design is supplied, `level_probs` reweight (via
+#'   inverse-probability/raking weights) the other attributes' realized
+#'   levels toward the design's declared marginal probabilities, and
+#'   `constraints` exclude tasks whose other-attribute combination is
+#'   infeasible — implementing the general context-weighted estimator
+#'   (Propositions "Nonparametric Estimation of the APNS/CAPNS"). See
+#'   \code{\link{make_design}} and \code{\link{.attach_design_weights}}.
 #'
 #' @return An object of class `"cj_apns"` with components:
 #'   * `estimand`, `assumption`, `se_method`: as requested.
@@ -157,7 +175,8 @@ cj_apns <- function(formula, data, id,
   # ---- point estimates --------------------------------------------------
   pt <- .estimate_point(formula, data, id, id_var, attr_names,
                         estimand, assumption, preferences, task_var, informative,
-                        profile_var)
+                        profile_var, design)
+  .warn_mapns_not_identified(pt, assumption, preferences)
 
   # ---- standard errors --------------------------------------------------
   se_detail <- NULL; ci <- NULL
@@ -166,14 +185,16 @@ cj_apns <- function(formula, data, id,
     se_result <- switch(se,
       parametric   = .se_parametric(formula, data, id, id_var, attr_names,
                                      estimand, assumption, preferences, B, alpha,
-                                     task_var, informative, profile_var),
+                                     task_var, informative, profile_var, design),
       bootstrap    = .se_bootstrap(formula, data, id, id_var, attr_names,
                                     estimand, assumption, preferences, B,
-                                    task_var, informative, profile_var),
-      folded_normal = .se_folded_normal(pt, assumption),
+                                    task_var, informative, profile_var, design),
+      folded_normal = .se_folded_normal(pt, assumption, formula, data, id_var,
+                                        preferences, task_var, informative, profile_var,
+                                        design),
       jackknife    = .se_jackknife(formula, data, id, id_var, attr_names,
                                     estimand, assumption, preferences,
-                                    task_var, informative, profile_var)
+                                    task_var, informative, profile_var, design)
     )
     se_detail <- se_result$se
     # Parametric bootstrap uses percentile CIs (Algorithm 1 in paper); all
@@ -219,18 +240,76 @@ cj_apns <- function(formula, data, id,
 # Internal point estimation
 # ══════════════════════════════════════════════════════════════════════════════
 
+#' Aggregate pairwise conditional APNS estimates into a MAPNS
+#'
+#' Proposition 8 identifies MAPNS under heterogeneous separable transitive
+#' monotonicity as a share-weighted sum of each preference group's CAPNS at
+#' that group's *own* extreme (most-/least-favored) pair, not an average over
+#' all pairwise comparisons. For a binary attribute (Dl == 2) there is only
+#' one pair, which is trivially every group's extreme pair, so the two
+#' formulations coincide. For Dl > 2, computing this requires knowing each
+#' group's own extreme pair, which is only available from `type = "ranking"`
+#' preferences (see `make_preferences`); `binary`/`scale`/`multilevel`
+#' preference types do not carry that information, so MAPNS is not
+#' identified and NA is returned (pairwise APNS/ACMCE estimates remain valid
+#' and are still reported).
+#' @keywords internal
+.mapns_from_pairwise_cond <- function(apns_cond, Dl) {
+  if (Dl == 2) return(apns_cond[[1]]$estimate)
+  NA_real_
+}
+
+#' Warn once when conditional MAPNS could not be identified
+#'
+#' Emits a single consolidated warning listing attributes for which
+#' `.mapns_from_pairwise_cond` returned NA (Dl > 2 with non-ranking
+#' preferences). Called only from `cj_apns()` on the point estimate, not from
+#' inside `.estimate_point` itself, so that bootstrap/jackknife/parametric SE
+#' loops (which call `.estimate_point` hundreds of times) do not spam the
+#' same warning on every replicate.
+#' @keywords internal
+.warn_mapns_not_identified <- function(pt, assumption, preferences) {
+  if (is.null(preferences) || preferences$type == "ranking") return(invisible(NULL))
+  if (assumption == "separability" || is.null(pt$mapns)) return(invisible(NULL))
+
+  bad <- character(0)
+  for (a in names(pt$mapns)) {
+    val <- pt$mapns[[a]]
+    cond_val <- if (assumption == "both" && is.list(val)) val$conditional else val
+    if (!is.null(cond_val) && length(cond_val) == 1 && is.na(cond_val) &&
+        a %in% names(pt$attributes) && length(pt$attributes[[a]]) > 2) {
+      bad <- c(bad, a)
+    }
+  }
+
+  if (length(bad) > 0)
+    warning(
+      "MAPNS under conditional/heterogeneous separable monotonicity is not ",
+      "identified for attribute(s) ", paste(bad, collapse = ", "),
+      " (more than two levels) with preferences$type = \"", preferences$type,
+      "\": this requires each preference group's own extreme (most- and ",
+      "least-favored) levels, which this preference type does not provide. ",
+      "Use type = \"ranking\" (see tidy_ranking_data() / make_preferences()) ",
+      "to estimate MAPNS for these attributes. Pairwise APNS/ACMCE estimates ",
+      "are still reported.",
+      call. = FALSE
+    )
+  invisible(NULL)
+}
+
 #' @keywords internal
 .estimate_point <- function(formula, data, id, id_var, attr_names,
                             estimand, assumption, preferences,
                             task_var = NULL, informative = "all",
-                            profile_var = NULL) {
+                            profile_var = NULL, design = "uniform") {
 
   attributes_info <- lapply(attr_names, function(a) levels(data[[a]]))
   names(attributes_info) <- attr_names
+  outcome_var <- all.vars(formula)[1]
 
   amce_result <- estimate_amce(formula, data, id = id,
                                task_var = task_var, informative = informative,
-                               profile_var = profile_var)
+                               profile_var = profile_var, design = design)
 
   if (estimand == "amce")
     return(list(attributes = attributes_info, amce = amce_result$amce,
@@ -245,13 +324,30 @@ cj_apns <- function(formula, data, id,
     levs <- attributes_info[[a]]
     Dl <- length(levs); base <- levs[1]
 
+    # ── design weighting (Propositions "Nonparametric Estimation of the
+    # APNS/CAPNS"): NULL under design = "uniform" reproduces the pooled
+    # Corollary exactly; otherwise attach per-task IPW weights for this
+    # attribute's context (all other attributes). ────────────────────────
+    weights_col <- NULL
+    if (!identical(design, "uniform")) {
+      data$.design_weight <- .attach_design_weights(data, attr_names, a, design,
+                                                     id_var, task_var)
+      weights_col <- ".design_weight"
+    }
+
     # ── separable monotonicity ──────────────────────────────────────────
     if (do_sep) {
       apns_sep <- list()
       for (q in seq_along(levs)) for (p in seq_along(levs)) {
         if (q >= p) next
         pair <- paste0(levs[q], " vs ", levs[p])
-        val <- abs(get_amce_for_pair(amce_result, a, levs[q], levs[p], base))
+        # Direct profile-1/2-conditioned estimate for this exact pair
+        # (Theorem 1), not reconstructed from base-level coefficients.
+        val <- abs(estimate_pairwise(data, outcome_var, a, levs[q], levs[p],
+                                     id_var = id_var, task_var = task_var,
+                                     informative = informative,
+                                     profile_var = profile_var,
+                                     weights_col = weights_col)$estimate)
         apns_sep[[pair]] <- list(tq = levs[q], tp = levs[p],
                                  estimate = val, assumption = "separability")
       }
@@ -291,28 +387,15 @@ cj_apns <- function(formula, data, id,
           dm_g     <- data[data$.pg == 1L, , drop = FALSE]
           if (nrow(dm_g) == 0) next
 
-          # Filter to tasks informative for the (ep_top, ep_bot) pair directly,
-          # using ep_bot as the baseline (Proposition 5). 
-          if (informative == "informative" && !is.null(task_var)) {
-            task_key_g     <- paste(dm_g[[id_var]], dm_g[[task_var]], sep = ":::")
-            profile_vals_g <- if (!is.null(profile_var)) dm_g[[profile_var]] else NULL
-            keep_inf       <- .filter_informative(dm_g[[a]], task_key_g,
-                                                  ep_top, ep_bot, profile_vals_g)
-            dm_inf <- dm_g[keep_inf, , drop = FALSE]
-          } else {
-            dm_inf <- dm_g
-          }
-          if (nrow(dm_inf) == 0) next
-
-          outcome_var <- all.vars(formula)[1]
-          idx_tq <- which(as.character(dm_inf[[a]]) == ep_top)
-          idx_tp <- which(as.character(dm_inf[[a]]) == ep_bot)
-          if (length(idx_tq) == 0 || length(idx_tp) == 0) next
-
-          v_g <- mean(dm_inf[[outcome_var]][idx_tq], na.rm = TRUE) -
-                 mean(dm_inf[[outcome_var]][idx_tp], na.rm = TRUE)
-
-          if (is.na(v_g)) next
+          # Direct pairwise estimate at this group's own extreme pair
+          # (ep_top, ep_bot), restricted to informative tasks (Proposition 8).
+          pw_g <- estimate_pairwise(dm_g, outcome_var, a, ep_top, ep_bot,
+                                    id_var = id_var, task_var = task_var,
+                                    informative = informative,
+                                    profile_var = profile_var,
+                                    weights_col = weights_col)
+          if (is.na(pw_g$estimate)) next
+          v_g <- pw_g$estimate
 
           apns_cond[[ep]] <- list(tq = ep_top, tp = ep_bot,
             estimate = pi_g * abs(v_g), assumption = "conditional")
@@ -349,14 +432,8 @@ cj_apns <- function(formula, data, id,
               sapply(pref_groups, function(g) mean(dm$.pg == g, na.rm = TRUE)),
               pref_groups
             )
-            amce_list <- stats::setNames(
-              lapply(pref_groups, function(g) {
-                sub_dm <- dm[!is.na(dm$.pg) & dm$.pg == g, , drop = FALSE]
-                if (nrow(sub_dm) == 0) return(NULL)
-                estimate_amce(formula, sub_dm, id = id,
-                              task_var = task_var, informative = informative,
-                              profile_var = profile_var)
-              }),
+            sub_dm_list <- stats::setNames(
+              lapply(pref_groups, function(g) dm[!is.na(dm$.pg) & dm$.pg == g, , drop = FALSE]),
               pref_groups
             )
 
@@ -364,38 +441,55 @@ cj_apns <- function(formula, data, id,
             for (q in seq_along(levs)) for (p in seq_along(levs)) {
               if (q >= p) next
               pair <- paste0(levs[q], " vs ", levs[p])
+              # Direct pairwise estimate for this pair, within each
+              # preference-group subclass (generalises Theorem 2 to K groups).
               grp_amces <- sapply(pref_groups, function(g) {
-                if (is.null(amce_list[[g]])) return(0)
-                get_amce_for_pair(amce_list[[g]], a, levs[q], levs[p], base)
+                sub_dm <- sub_dm_list[[g]]
+                if (nrow(sub_dm) == 0) return(0)
+                pw <- estimate_pairwise(sub_dm, outcome_var, a, levs[q], levs[p],
+                                        id_var = id_var, task_var = task_var,
+                                        informative = informative,
+                                        profile_var = profile_var,
+                                        weights_col = weights_col)
+                if (is.na(pw$estimate)) 0 else pw$estimate
               })
               names(grp_amces) <- pref_groups
               apns_cond[[pair]] <- list(tq = levs[q], tp = levs[p],
                 estimate = sum(pi_vals * abs(grp_amces)), assumption = "conditional")
               acmce_a[[pair]] <- list(groups = grp_amces, pi = pi_vals)
             }
-            mapns_cond <- sum(sapply(apns_cond, `[[`, "estimate")) / (Dl * (Dl - 1) / 2)
+            mapns_cond <- .mapns_from_pairwise_cond(apns_cond, Dl)
             pi_hat[[a]] <- pi_vals; acmce[[a]] <- acmce_a
           } else {
-            pi_val   <- mean(dm$.pg, na.rm = TRUE)
-            amce_pro <- estimate_amce(formula, dm[dm$.pg == 1, ], id = id,
-                                      task_var = task_var, informative = informative,
-                                      profile_var = profile_var)
-            amce_con <- estimate_amce(formula, dm[dm$.pg == 0, ], id = id,
-                                      task_var = task_var, informative = informative,
-                                      profile_var = profile_var)
+            pi_val <- mean(dm$.pg, na.rm = TRUE)
+            dm_pro <- dm[dm$.pg == 1, , drop = FALSE]
+            dm_con <- dm[dm$.pg == 0, , drop = FALSE]
 
             apns_cond <- list(); acmce_a <- list()
             for (q in seq_along(levs)) for (p in seq_along(levs)) {
               if (q >= p) next
               pair <- paste0(levs[q], " vs ", levs[p])
-              v_pro <- get_amce_for_pair(amce_pro, a, levs[q], levs[p], base)
-              v_con <- get_amce_for_pair(amce_con, a, levs[q], levs[p], base)
+              # Direct pairwise estimate for this pair, within the pro/con
+              # subclass (Proposition 2/8), not reconstructed from base-level
+              # regression coefficients.
+              v_pro <- estimate_pairwise(dm_pro, outcome_var, a, levs[q], levs[p],
+                                         id_var = id_var, task_var = task_var,
+                                         informative = informative,
+                                         profile_var = profile_var,
+                                         weights_col = weights_col)$estimate
+              v_con <- estimate_pairwise(dm_con, outcome_var, a, levs[q], levs[p],
+                                         id_var = id_var, task_var = task_var,
+                                         informative = informative,
+                                         profile_var = profile_var,
+                                         weights_col = weights_col)$estimate
+              if (is.na(v_pro)) v_pro <- 0
+              if (is.na(v_con)) v_con <- 0
               apns_cond[[pair]] <- list(tq = levs[q], tp = levs[p],
                 estimate = pi_val * abs(v_pro) + (1 - pi_val) * abs(v_con),
                 assumption = "conditional")
               acmce_a[[pair]] <- list(pro = v_pro, con = v_con, pi = pi_val)
             }
-            mapns_cond <- sum(sapply(apns_cond, `[[`, "estimate")) / (Dl * (Dl - 1) / 2)
+            mapns_cond <- .mapns_from_pairwise_cond(apns_cond, Dl)
             pi_hat[[a]] <- pi_val; acmce[[a]] <- acmce_a
           }
         }

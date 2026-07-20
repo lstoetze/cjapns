@@ -16,7 +16,7 @@ remotes::install_github("lstoetze/cjapns")
 
 Standard conjoint analysis estimates Average Marginal Component Effects (AMCEs), which measure how changing an attribute level affects profile selection. However, the AMCE is not well suited for assessing **attribute relevance** — a zero AMCE can arise even when an attribute is highly important, if respondents disagree on the preferred direction.
 
-The APNS estimand captures the probability that a change in an attribute level is both *necessary* and *sufficient* for a respondent's choice — a direct measure of attribute relevance. Under separable monotonicity, the MAPNS simplifies to the average absolute AMCE. Under the more realistic conditional separable monotonicity, it is a weighted sum of absolute conditional AMCEs by preference group.
+The APNS estimand captures the probability that a change in an attribute level is both *necessary* and *sufficient* for a respondent's choice — a direct measure of attribute relevance. Under separable monotonicity, the MAPNS simplifies to the **maximum** absolute AMCE across all pairwise level comparisons. Under the more realistic conditional/heterogeneous separable (transitive) monotonicity, it is a share-weighted sum of each preference group's absolute conditional AMCE at *that group's own* most- and least-favored levels — not an average across all pairs. Identifying this for attributes with more than two levels requires `type = "ranking"` preference data (see below); the `binary`/`scale`/`multilevel` types only identify MAPNS for binary (two-level) attributes.
 
 ## Quick start
 
