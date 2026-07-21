@@ -4,7 +4,15 @@
 \alias{estimate_amce}
 \title{Internal AMCE estimation via difference-in-means}
 \usage{
-estimate_amce(formula, data, id = NULL)
+estimate_amce(
+  formula,
+  data,
+  id = NULL,
+  task_var = NULL,
+  informative = c("all", "informative"),
+  profile_var = NULL,
+  design = "uniform"
+)
 }
 \arguments{
 \item{formula}{A formula: `outcome ~ attribute1 + attribute2 + ...`.}
@@ -13,14 +21,31 @@ estimate_amce(formula, data, id = NULL)
 
 \item{id}{A one-sided formula for the respondent ID (e.g., `~ ResponseId`).
 Used for cluster-robust standard errors.}
+
+\item{task_var}{Character name of the task-number variable (e.g., `"time"`).
+Required when `informative = "informative"`.}
+
+\item{informative}{Whether to restrict to informative tasks (`"informative"`)
+or use all tasks (`"all"`, default). See `.filter_informative`.}
+
+\item{profile_var}{Character name of the profile indicator variable
+(e.g., `"profile"`). When provided, informative task detection compares
+profiles explicitly rather than counting levels.}
+
+\item{design}{Either `"uniform"` (default; unweighted pooled estimator)
+or a `"cj_design"` object from \code{\link{make_design}}, applying the
+general context-weighted estimator via \code{\link{.attach_design_weights}}.}
 }
 \value{
 A list with elements `amce` (per-attribute estimates),
   `coefficients`, `se`, `attributes`.
 }
 \description{
-Computes Average Marginal Component Effects using the bivariate
-subclassification estimator (Proposition 5 in Stoetzer & Magazinnik, 2026).
-For each attribute, AMCE = mean(Y | level = tq) - mean(Y | level = tp).
+Computes Average Marginal Component Effects, relative to a base level, via
+\code{\link{estimate_pairwise}} — one direct estimate per non-base level.
+Used for `estimand = "amce"` reporting; pairwise APNS/ACMCE contrasts
+between two arbitrary (possibly non-base) levels are computed by calling
+\code{estimate_pairwise} directly rather than reconstructing them from
+these base-relative coefficients.
 }
 \keyword{internal}

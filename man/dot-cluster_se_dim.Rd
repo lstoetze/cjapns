@@ -2,11 +2,16 @@
 % Please edit documentation in R/amce.R
 \name{.cluster_se_dim}
 \alias{.cluster_se_dim}
-\title{Cluster-robust SE for a difference-in-means}
+\title{Cluster-robust SE for a (possibly weighted) difference-in-means}
 \usage{
-.cluster_se_dim(Y, treatment, level_tq, level_tp, cluster)
+.cluster_se_dim(Y, treatment, level_tq, level_tp, cluster, weights = NULL)
 }
 \description{
-Cluster-robust SE for a difference-in-means
+When `weights` is `NULL`, this is an ordinary-least-squares cluster-robust
+sandwich SE (unchanged from the unweighted estimator). When `weights` is
+supplied, fits weighted least squares and uses the corresponding weighted
+cluster-robust sandwich (bread \eqn{(X'WX)^{-1}}, meat built from
+\eqn{w_i X_i e_i}), which reduces to the unweighted formula exactly when
+all weights equal 1.
 }
 \keyword{internal}

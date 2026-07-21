@@ -21,6 +21,9 @@
 #'     group's |ACMCE| at that group's own extreme levels (Proposition 4/8),
 #'     which for attributes with more than two levels requires
 #'     `preferences` of `type = "ranking"` — see `make_preferences()`.
+#'     Preference-ordering groups with zero informative-task observations
+#'     are excluded and the remaining groups' weights renormalized (see
+#'     `mapns_coverage`, `missing_groups`, `capns_table` in the return value).
 #'   * `"apns"`: Pairwise Expected Probability of Necessary and Sufficient.
 #'   * `"amce"`: Standard Average Marginal Component Effects only.
 #' @param assumption Identifying assumption:
@@ -76,6 +79,27 @@
 #'   * `amce`: AMCE estimates per attribute.
 #'   * `apns`, `mapns`: causal attribution estimates (if requested).
 #'   * `acmce`, `pi_hat`: conditional AMCEs and group shares (if conditional).
+#'   * `mapns_coverage`: named vector (per attribute), only present when
+#'     `assumption` is `"conditional"` or `"both"`. The share (in \[0, 1\])
+#'     of the preference-ordering-group population (by \eqn{\pi_g} mass)
+#'     that had informative-task coverage and so contributed to the
+#'     reported conditional MAPNS. Groups lacking coverage are excluded and
+#'     the remaining groups' weights renormalized (rather than treating an
+#'     unidentified group's contribution as zero, which would be downward
+#'     biased); `mapns_coverage` tells you how much of the population that
+#'     renormalization is silent about. Equals 1 when every group had
+#'     coverage.
+#'   * `missing_groups`: data.frame (`item`, `contrast`, `pi_g`)
+#'     listing every preference-ordering group with zero informative-task
+#'     observations for its own extreme pair — excluded from the
+#'     conditional MAPNS sum entirely. `NULL` if none, or if
+#'     `assumption = "separability"`.
+#'   * `capns_table`: data.frame (`item`, `contrast`, `estimate`, `pi_g`,
+#'     `n_informative`) listing every conditional CAPNS estimate that *was*
+#'     identified, across all attributes, sorted by `n_informative`
+#'     descending. Use alongside `missing_groups` to see the full group
+#'     structure feeding each attribute's conditional MAPNS. `NULL` under
+#'     `assumption = "separability"`.
 #'   * `ci`: confidence intervals (if SEs requested).
 #'   * `se_detail`: named vector of standard errors.
 #'
@@ -178,6 +202,35 @@ cj_apns <- function(formula, data, id,
                         profile_var, design)
   .warn_mapns_not_identified(pt, assumption, preferences)
 
+  # ---- conditional-group diagnostics -------------------------------------
+  # missing_groups: ordering groups with zero informative-task coverage,
+  # excluded from the renormalized conditional MAPNS (see .renormalized_mapns).
+  # capns_table: every group with an identified CAPNS, its share, and its
+  # informative-task sample size, across all attributes.
+  missing_groups <- NULL; capns_table <- NULL
+  if (!is.null(pt$cond_groups)) {
+    all_records <- do.call(rbind, lapply(names(pt$cond_groups), function(a) {
+      recs <- pt$cond_groups[[a]]
+      if (length(recs) == 0) return(NULL)
+      do.call(rbind, lapply(recs, function(r) data.frame(
+        item = a, contrast = r$contrast, pi_g = r$pi_g,
+        estimate = r$estimate, n_respondents = r$n_respondents,
+        n_informative = r$n_informative, stringsAsFactors = FALSE)))
+    }))
+    if (!is.null(all_records)) {
+      missing_groups <- all_records[is.na(all_records$estimate),
+                                    c("item", "contrast", "pi_g")]
+      row.names(missing_groups) <- NULL
+
+      capns_table <- all_records[!is.na(all_records$estimate),
+                                 c("item", "contrast", "estimate", "pi_g", "n_informative")]
+      capns_table <- capns_table[order(-capns_table$n_informative), ]
+      row.names(capns_table) <- NULL
+    }
+  }
+  mapns_coverage <- if (!is.null(pt$mapns_coverage) && length(pt$mapns_coverage) > 0)
+    unlist(pt$mapns_coverage) else NULL
+
   # ---- standard errors --------------------------------------------------
   se_detail <- NULL; ci <- NULL
 
@@ -225,6 +278,9 @@ cj_apns <- function(formula, data, id,
          attributes = pt$attributes, amce = pt$amce,
          apns = pt$apns, mapns = pt$mapns,
          pi_hat = pt$pi_hat, acmce = pt$acmce,
+         mapns_coverage = mapns_coverage,
+         missing_groups = missing_groups,
+         capns_table = capns_table,
          ci = ci, se_detail = se_detail,
          alpha = alpha, B = B, call = cl,
          task_var = task_var, informative = informative,
@@ -257,6 +313,43 @@ cj_apns <- function(formula, data, id,
 .mapns_from_pairwise_cond <- function(apns_cond, Dl) {
   if (Dl == 2) return(apns_cond[[1]]$estimate)
   NA_real_
+}
+
+#' Renormalized weighted mean of conditional group CAPNS estimates
+#'
+#' Implements a "drop and renormalize" treatment of ordering groups with no
+#' informative-task coverage: groups with an NA estimate are excluded from
+#' the weighted sum entirely, and the remaining groups' shares are
+#' renormalized to sum to 1, rather than treating an unidentified group's
+#' contribution as zero. Zero-filling is downward biased -- CAPNS is always
+#' non-negative, so forcing an unidentified group's unknown true value to 0
+#' can only pull the aggregate down, never up (see \code{mapns_sparsity_issues.tex}).
+#'
+#' Note this changes the estimand slightly relative to the full-population
+#' MAPNS: it targets the sub-population whose ordering group has
+#' informative-task coverage in this sample. \code{coverage} reports what
+#' share of that population (by \eqn{\pi_g} mass) was actually used, so
+#' callers can judge how much of the population the estimate is silent about.
+#'
+#' @param pi_vec Numeric vector of group shares (need not sum to 1; only
+#'   groups with a non-NA estimate are used in the renormalized denominator).
+#' @param est_vec Numeric vector of (already absolute-valued) group CAPNS
+#'   estimates, same length/order as \code{pi_vec}, with NA for groups
+#'   lacking informative-task coverage.
+#' @return A list with \code{mapns} (renormalized weighted mean, or NA if
+#'   every group is missing or \code{pi_vec} sums to 0) and \code{coverage}
+#'   (share of \code{pi_vec}'s total mass with a non-NA estimate, in [0,1]).
+#' @keywords internal
+.renormalized_mapns <- function(pi_vec, est_vec) {
+  obs <- !is.na(est_vec) & !is.na(pi_vec)
+  total_pi <- sum(pi_vec, na.rm = TRUE)
+  if (!any(obs) || total_pi <= 0)
+    return(list(mapns = NA_real_, coverage = 0))
+  observed_pi <- sum(pi_vec[obs])
+  list(
+    mapns = sum(pi_vec[obs] * est_vec[obs]) / observed_pi,
+    coverage = observed_pi / total_pi
+  )
 }
 
 #' Warn once when conditional MAPNS could not be identified
@@ -317,6 +410,7 @@ cj_apns <- function(formula, data, id,
 
   apns <- list(); mapns <- list()
   pi_hat <- list(); acmce <- list()
+  cond_groups <- list(); mapns_coverage <- list()
   do_sep  <- assumption %in% c("separability", "both")
   do_cond <- assumption %in% c("conditional", "both")
 
@@ -375,39 +469,57 @@ cj_apns <- function(formula, data, id,
         ep_row    <- ep_label[match(row_ids, pref_ids)]
 
         unique_eps <- unique(ep_label[!is.na(ep_label)])
-        apns_cond <- list(); acmce_a <- list()
+        apns_cond <- list(); acmce_a <- list(); group_records <- list()
 
         for (ep in unique_eps) {
           in_pref  <- !is.na(ep_label) & ep_label == ep
           pi_g     <- mean(in_pref, na.rm = TRUE)
           ep_top   <- top_vals[which(in_pref)[1]]
           ep_bot   <- bot_vals[which(in_pref)[1]]
+          n_resp   <- sum(in_pref)
 
           data$.pg <- as.integer(!is.na(ep_row) & ep_row == ep)
           dm_g     <- data[data$.pg == 1L, , drop = FALSE]
-          if (nrow(dm_g) == 0) next
 
           # Direct pairwise estimate at this group's own extreme pair
           # (ep_top, ep_bot), restricted to informative tasks (Proposition 8).
-          pw_g <- estimate_pairwise(dm_g, outcome_var, a, ep_top, ep_bot,
-                                    id_var = id_var, task_var = task_var,
-                                    informative = informative,
-                                    profile_var = profile_var,
-                                    weights_col = weights_col)
-          if (is.na(pw_g$estimate)) next
-          v_g <- pw_g$estimate
+          v_g <- NA_real_; n_inf <- 0L
+          if (nrow(dm_g) > 0) {
+            pw_g <- estimate_pairwise(dm_g, outcome_var, a, ep_top, ep_bot,
+                                      id_var = id_var, task_var = task_var,
+                                      informative = informative,
+                                      profile_var = profile_var,
+                                      weights_col = weights_col)
+            v_g   <- pw_g$estimate
+            n_inf <- if (!is.na(pw_g$n_tq)) pw_g$n_tq + pw_g$n_tp else 0L
+          }
 
-          apns_cond[[ep]] <- list(tq = ep_top, tp = ep_bot,
-            estimate = pi_g * abs(v_g), assumption = "conditional")
-          acmce_a[[ep]] <- list(estimate = v_g, pi = pi_g,
-                                tq = ep_top, tp = ep_bot)
+          group_records[[ep]] <- list(
+            contrast = ep, pi_g = pi_g,
+            estimate = if (is.na(v_g)) NA_real_ else abs(v_g),
+            n_respondents = n_resp, n_informative = n_inf)
+
+          if (!is.na(v_g)) {
+            apns_cond[[ep]] <- list(tq = ep_top, tp = ep_bot,
+              estimate = pi_g * abs(v_g), assumption = "conditional")
+            acmce_a[[ep]] <- list(estimate = v_g, pi = pi_g,
+                                  tq = ep_top, tp = ep_bot)
+          }
         }
         data$.pg <- NULL
+        cond_groups[[a]] <- group_records
 
         if (length(apns_cond) == 0) {
           do_cond_a <- FALSE
         } else {
-          mapns_cond <- sum(sapply(apns_cond, `[[`, "estimate"))
+          # Proposition 8, renormalized (see .renormalized_mapns): groups
+          # with no informative-task coverage are excluded rather than
+          # zero-filled, and the remaining groups' shares are renormalized.
+          agg <- .renormalized_mapns(
+            sapply(group_records, `[[`, "pi_g"),
+            sapply(group_records, `[[`, "estimate"))
+          mapns_cond <- agg$mapns
+          mapns_coverage[[a]] <- agg$coverage
           pi_hat[[a]] <- stats::setNames(sapply(acmce_a, `[[`, "pi"), names(acmce_a))
           acmce[[a]]  <- acmce_a
         }
@@ -436,61 +548,101 @@ cj_apns <- function(formula, data, id,
               lapply(pref_groups, function(g) dm[!is.na(dm$.pg) & dm$.pg == g, , drop = FALSE]),
               pref_groups
             )
+            n_resp_grp <- stats::setNames(
+              sapply(pref_groups, function(g) length(unique(sub_dm_list[[g]][[id_var]]))),
+              pref_groups
+            )
 
-            apns_cond <- list(); acmce_a <- list()
+            apns_cond <- list(); acmce_a <- list(); group_records <- list()
             for (q in seq_along(levs)) for (p in seq_along(levs)) {
               if (q >= p) next
               pair <- paste0(levs[q], " vs ", levs[p])
               # Direct pairwise estimate for this pair, within each
               # preference-group subclass (generalises Theorem 2 to K groups).
-              grp_amces <- sapply(pref_groups, function(g) {
+              grp_amces <- stats::setNames(rep(NA_real_, length(pref_groups)), pref_groups)
+              n_inf_grp  <- stats::setNames(rep(0L, length(pref_groups)), pref_groups)
+              for (g in pref_groups) {
                 sub_dm <- sub_dm_list[[g]]
-                if (nrow(sub_dm) == 0) return(0)
+                if (nrow(sub_dm) == 0) next
                 pw <- estimate_pairwise(sub_dm, outcome_var, a, levs[q], levs[p],
                                         id_var = id_var, task_var = task_var,
                                         informative = informative,
                                         profile_var = profile_var,
                                         weights_col = weights_col)
-                if (is.na(pw$estimate)) 0 else pw$estimate
-              })
-              names(grp_amces) <- pref_groups
+                grp_amces[g] <- pw$estimate
+                n_inf_grp[g] <- if (!is.na(pw$n_tq)) pw$n_tq + pw$n_tp else 0L
+              }
+              # Renormalized (see .renormalized_mapns): groups with no
+              # informative-task coverage for this pair are excluded rather
+              # than zero-filled.
+              agg <- .renormalized_mapns(pi_vals, abs(grp_amces))
               apns_cond[[pair]] <- list(tq = levs[q], tp = levs[p],
-                estimate = sum(pi_vals * abs(grp_amces)), assumption = "conditional")
+                estimate = agg$mapns, assumption = "conditional")
               acmce_a[[pair]] <- list(groups = grp_amces, pi = pi_vals)
+              if (Dl == 2) mapns_coverage[[a]] <- agg$coverage
+
+              for (g in pref_groups) {
+                group_records[[paste0(pair, " [", g, "]")]] <- list(
+                  contrast = paste0(pair, " (group: ", g, ")"), pi_g = pi_vals[[g]],
+                  estimate = if (is.na(grp_amces[[g]])) NA_real_ else abs(grp_amces[[g]]),
+                  n_respondents = n_resp_grp[[g]], n_informative = n_inf_grp[[g]])
+              }
             }
             mapns_cond <- .mapns_from_pairwise_cond(apns_cond, Dl)
             pi_hat[[a]] <- pi_vals; acmce[[a]] <- acmce_a
+            cond_groups[[a]] <- group_records
           } else {
             pi_val <- mean(dm$.pg, na.rm = TRUE)
             dm_pro <- dm[dm$.pg == 1, , drop = FALSE]
             dm_con <- dm[dm$.pg == 0, , drop = FALSE]
+            n_resp_pro <- length(unique(dm_pro[[id_var]]))
+            n_resp_con <- length(unique(dm_con[[id_var]]))
 
-            apns_cond <- list(); acmce_a <- list()
+            apns_cond <- list(); acmce_a <- list(); group_records <- list()
             for (q in seq_along(levs)) for (p in seq_along(levs)) {
               if (q >= p) next
               pair <- paste0(levs[q], " vs ", levs[p])
               # Direct pairwise estimate for this pair, within the pro/con
               # subclass (Proposition 2/8), not reconstructed from base-level
               # regression coefficients.
-              v_pro <- estimate_pairwise(dm_pro, outcome_var, a, levs[q], levs[p],
-                                         id_var = id_var, task_var = task_var,
-                                         informative = informative,
-                                         profile_var = profile_var,
-                                         weights_col = weights_col)$estimate
-              v_con <- estimate_pairwise(dm_con, outcome_var, a, levs[q], levs[p],
-                                         id_var = id_var, task_var = task_var,
-                                         informative = informative,
-                                         profile_var = profile_var,
-                                         weights_col = weights_col)$estimate
-              if (is.na(v_pro)) v_pro <- 0
-              if (is.na(v_con)) v_con <- 0
+              pw_pro <- estimate_pairwise(dm_pro, outcome_var, a, levs[q], levs[p],
+                                          id_var = id_var, task_var = task_var,
+                                          informative = informative,
+                                          profile_var = profile_var,
+                                          weights_col = weights_col)
+              pw_con <- estimate_pairwise(dm_con, outcome_var, a, levs[q], levs[p],
+                                          id_var = id_var, task_var = task_var,
+                                          informative = informative,
+                                          profile_var = profile_var,
+                                          weights_col = weights_col)
+              v_pro <- pw_pro$estimate; v_con <- pw_con$estimate
+              n_inf_pro <- if (!is.na(pw_pro$n_tq)) pw_pro$n_tq + pw_pro$n_tp else 0L
+              n_inf_con <- if (!is.na(pw_con$n_tq)) pw_con$n_tq + pw_con$n_tp else 0L
+
+              # Renormalized (see .renormalized_mapns): if either the pro or
+              # con group has no informative-task coverage for this pair, it
+              # is excluded rather than zero-filled.
+              agg <- .renormalized_mapns(
+                c(pi_val, 1 - pi_val),
+                c(if (is.na(v_pro)) NA_real_ else abs(v_pro),
+                  if (is.na(v_con)) NA_real_ else abs(v_con)))
               apns_cond[[pair]] <- list(tq = levs[q], tp = levs[p],
-                estimate = pi_val * abs(v_pro) + (1 - pi_val) * abs(v_con),
-                assumption = "conditional")
+                estimate = agg$mapns, assumption = "conditional")
               acmce_a[[pair]] <- list(pro = v_pro, con = v_con, pi = pi_val)
+              if (Dl == 2) mapns_coverage[[a]] <- agg$coverage
+
+              group_records[[paste0(pair, " [pro]")]] <- list(
+                contrast = paste0(pair, " (pro: ", levs[q], " > ", levs[p], ")"),
+                pi_g = pi_val, estimate = if (is.na(v_pro)) NA_real_ else abs(v_pro),
+                n_respondents = n_resp_pro, n_informative = n_inf_pro)
+              group_records[[paste0(pair, " [con]")]] <- list(
+                contrast = paste0(pair, " (con: ", levs[p], " > ", levs[q], ")"),
+                pi_g = 1 - pi_val, estimate = if (is.na(v_con)) NA_real_ else abs(v_con),
+                n_respondents = n_resp_con, n_informative = n_inf_con)
             }
             mapns_cond <- .mapns_from_pairwise_cond(apns_cond, Dl)
             pi_hat[[a]] <- pi_val; acmce[[a]] <- acmce_a
+            cond_groups[[a]] <- group_records
           }
         }
         data$.pg <- NULL
@@ -514,7 +666,9 @@ cj_apns <- function(formula, data, id,
        apns = if (estimand %in% c("apns", "mapns")) apns else NULL,
        mapns = if (estimand == "mapns") mapns else NULL,
        pi_hat = if (do_cond) pi_hat else NULL,
-       acmce = if (do_cond) acmce else NULL)
+       acmce = if (do_cond) acmce else NULL,
+       cond_groups = if (do_cond) cond_groups else NULL,
+       mapns_coverage = if (do_cond) mapns_coverage else NULL)
 }
 
 

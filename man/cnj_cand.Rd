@@ -10,6 +10,9 @@ A data frame with the following columns:
   \item{ResponseId}{Unique respondent identifier.}
   \item{time}{Task number (1, 2, ...). Each respondent completes
     multiple choice tasks.}
+  \item{profile}{Profile indicator within a task: \code{"a"} for the first
+    profile, \code{"b"} for the second. Together with \code{ResponseId} and
+    \code{time} this uniquely identifies each row.}
   \item{vote}{Binary outcome: 1 if the respondent selected this profile,
     0 otherwise.}
   \item{borders}{Attribute level for "Allow border closures during

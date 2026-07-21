@@ -4,45 +4,105 @@
 \alias{make_preferences}
 \title{Create preference data for conditional separable monotonicity}
 \usage{
-make_preferences(data, id, type = c("binary", "scale"), cutpoint = NULL)
+make_preferences(
+  data,
+  id,
+  type = c("binary", "scale", "multilevel", "ranking"),
+  cutpoint = NULL
+)
 }
 \arguments{
-\item{data}{A data.frame with one row per respondent containing the
-respondent ID and one column per attribute with preference values.}
+\item{data}{For \code{type \%in\% c("binary", "scale", "multilevel")}: a
+data.frame with one row per respondent containing the ID column and one
+column per attribute. For \code{type = "ranking"}: a
+\code{"cj_rank_data"} object produced by \code{\link{tidy_ranking_data}}.}
 
 \item{id}{A one-sided formula specifying the respondent ID variable
-(e.g., `~ ResponseId`).}
+(e.g. \code{~ ResponseId}).}
 
 \item{type}{How preferences are encoded:
-* `"binary"`: Values are `"pro"`/`"con"`, `1`/`0`, or `TRUE`/`FALSE`.
-* `"scale"`: Numeric values (e.g., Likert), dichotomised at `cutpoint`.}
+\describe{
+  \item{\code{"binary"}}{Values are \code{"pro"}/\code{"con"},
+    \code{1}/\code{0}, or \code{TRUE}/\code{FALSE}. Identifies MAPNS
+    only for two-level attributes; see Details.}
+  \item{\code{"scale"}}{Numeric values (e.g. Likert), dichotomised at
+    \code{cutpoint}. Identifies MAPNS only for two-level attributes;
+    see Details.}
+  \item{\code{"multilevel"}}{Raw character values stored as-is; one
+    group per unique value. Identifies pairwise APNS/ACMCE only; does
+    \emph{not} identify MAPNS for attributes with more than two levels
+    (see Details).}
+  \item{\code{"ranking"}}{Pair-specific binary indicator derived from a
+    full level ranking. Pass a \code{"cj_rank_data"} object as
+    \code{data}. Required for MAPNS estimation (Proposition 8) on
+    attributes with more than two levels.}
+}}
 
-\item{cutpoint}{For `type = "scale"`, the threshold at or above which a
-respondent is classified as "pro". Defaults to the midpoint of the range.}
+\item{cutpoint}{For \code{type = "scale"}, the threshold at or above which
+a respondent is classified as "pro". Defaults to the midpoint of the
+observed range.}
 }
 \value{
-An object of class `"cj_preferences"`.
+An object of class \code{"cj_preferences"}.
 }
 \description{
-Converts respondent-level preference data (e.g., from a pre-conjoint
-survey question) into the format needed for APNS estimation under
-conditional separable monotonicity. This maps each respondent's stated
-preference direction to the binary group indicator \eqn{p^{qp}_{il}}.
+Converts respondent-level preference data into the format needed for APNS
+estimation under conditional separable monotonicity (Assumption 2 /
+Proposition 2) and MAPNS estimation under heterogeneous separable
+transitive monotonicity (Assumption 4 / Proposition 4).
+}
+\details{
+For \strong{attributes with more than two levels}, MAPNS estimation
+(Proposition 8) requires knowing each preference group's own
+most-/least-favored (extreme) levels, which can only be recovered from a
+full ranking. Use \code{type = "ranking"} together with a
+\code{\link{tidy_ranking_data}} object for these attributes: for each
+respondent it recovers the top and bottom level of every attribute, and
+\code{cj_apns()} groups respondents by their stated (top, bottom) pair to
+estimate the group-share-weighted MAPNS.
+
+\code{type \%in\% c("binary", "scale", "multilevel")} instead encode a
+single preference group membership per attribute (e.g. pro/con), which
+identifies the pair-specific binary indicator \eqn{p^{qp}_{il}} from
+Assumption 2 for a given pair \eqn{(t_q, t_p)}, and hence the pairwise APNS
+(Proposition 2). But since it does not carry a full ordering, it cannot
+locate each group's own extreme pair for attributes with more than two
+levels: \code{cj_apns()} will still report pairwise APNS/ACMCE for these
+attributes, but MAPNS will be \code{NA} (with a warning) unless the
+attribute has exactly two levels, in which case the single pair is
+trivially every group's extreme pair and MAPNS is identified.
 }
 \examples{
 \dontrun{
 data(cnj_cand)
 
-# Extract preference data: one row per respondent
+# --- Binary attributes ---
 pref_dat <- cnj_cand[!duplicated(cnj_cand$ResponseId),
                       c("ResponseId", "Att_borders", "Att_eurobonds",
-                        "Att_immucard", "Att_schools", "Att_tracingapp")]
-
-# Strip Att_ prefix so names match the conjoint attributes
+                        "Att_immucard", "Att_schools")]
 names(pref_dat) <- gsub("^Att_", "", names(pref_dat))
-
 prefs <- make_preferences(pref_dat, id = ~ ResponseId, type = "binary")
-prefs
+
+# --- Multi-level attributes (ranking, Proposition 8) ---
+rank_spec <- list(
+  asylzeugnis = list(
+    rank_cols   = c("Keine Unstimmigkeiten"     = "rank_asyltestr1",
+                    "Geringe Unstimmigkeiten"   = "rank_asyltestr2",
+                    "Groessere Unstimmigkeiten" = "rank_asyltestr3"),
+    rank_values = c("1 - höchste Präferenz", "2", "3 - niedrigste Präferenz")
+  ),
+  geschlecht = list(
+    rank_cols   = c("Weiblich" = "rank_genderr1", "Maennlich" = "rank_genderr2"),
+    rank_values = 1:2
+  )
+)
+pref_dat_rank <- tidy_ranking_data(
+  conjoint_df[!duplicated(conjoint_df$respondent_id), ],
+  id        = ~ respondent_id,
+  rank_spec = rank_spec
+)
+prefs_rank <- make_preferences(pref_dat_rank, id = ~ respondent_id,
+                               type = "ranking")
 }
 
 }

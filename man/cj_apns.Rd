@@ -32,20 +32,32 @@ contain the outcome, attribute columns, and a respondent identifier.}
 (e.g., `~ ResponseId`). Required.}
 
 \item{estimand}{Which estimand to compute:
-* `"mapns"` (default): Expected Average Probability of Necessary and
-  Sufficient conditions, summarising overall attribute relevance.
+* `"mapns"` (default): Maximum Average Probability of Necessary and
+  Sufficient conditions, summarising overall attribute relevance. Under
+  separability this is the *maximum* |AMCE| across pairwise level
+  comparisons (Proposition 3/7); under the conditional/heterogeneous
+  assumption it is the group-share-weighted sum of each preference
+  group's |ACMCE| at that group's own extreme levels (Proposition 4/8),
+  which for attributes with more than two levels requires
+  `preferences` of `type = "ranking"` — see `make_preferences()`.
+  Preference-ordering groups with zero informative-task observations
+  are excluded and the remaining groups' weights renormalized (see
+  `mapns_coverage`, `missing_groups`, `capns_table` in the return value).
 * `"apns"`: Pairwise Expected Probability of Necessary and Sufficient.
 * `"amce"`: Standard Average Marginal Component Effects only.}
 
 \item{assumption}{Identifying assumption:
 * `"separability"` (default): Separable monotonicity. APNS = |AMCE|.
-* `"conditional"`: Conditional separable monotonicity. Requires
-  `preferences`.
+* `"conditional"`: Conditional/heterogeneous separable (transitive)
+  monotonicity. Requires `preferences`.
 * `"both"`: Estimate under both assumptions for comparison.}
 
 \item{preferences}{An object of class \code{"cj_preferences"} created by
 \code{make_preferences}. Required when \code{assumption} is
-\code{"conditional"} or \code{"both"}.}
+\code{"conditional"} or \code{"both"}. For MAPNS estimation on
+attributes with more than two levels, must be of `type = "ranking"`;
+other types only identify MAPNS for two-level attributes (pairwise APNS
+is unaffected). See \code{\link{make_preferences}}.}
 
 \item{se}{Method for standard error estimation:
 * `"none"`: No standard errors (fastest).
@@ -64,22 +76,31 @@ contain the outcome, attribute columns, and a respondent identifier.}
 \item{alpha}{Significance level for confidence intervals. Default 0.05.}
 
 \item{tasks}{A one-sided formula for the task-number variable
-(e.g., \code{~ time}). Required when \code{informative = "informative"}.}
+(e.g., `~ time`). Required when `informative = "informative"`.}
 
 \item{informative}{Whether to restrict AMCE estimation to informative tasks
-only (\code{"informative"}, default) or use all tasks (\code{"all"}).
-Informative tasks are those where exactly one profile shows level tq and
-all J-1 remaining profiles show tp (or vice versa), per Definition 3 in
-the paper. Requires \code{tasks} to be specified; falls back to
-\code{"all"} with a warning if \code{tasks} is not provided.}
+only (`"informative"`, default) or use all tasks (`"all"`). Informative
+tasks are those where exactly one profile shows level tq and all J-1
+remaining profiles show tp (or vice versa), per Definition 3 in the paper.
+Requires `tasks` to be specified; falls back to `"all"` with a warning if
+`tasks` is not provided.}
 
 \item{profile}{A one-sided formula for the profile indicator variable
-(e.g., \code{~ profile}). When provided, informative task detection
-compares profile \code{"a"} vs profile \code{"b"} attribute values
-explicitly rather than counting levels within a task.}
+(e.g., `~ profile`). When provided, informative task detection compares
+profile "a" vs profile "b" attribute values explicitly rather than
+counting levels within a task.}
 
-\item{design}{Either \code{"uniform"} (default) or an object from
-\code{make_design}.}
+\item{design}{Either \code{"uniform"} (default) or a \code{"cj_design"}
+object from \code{\link{make_design}}. Under \code{"uniform"}, every
+estimator is the simple pooled difference-in-means (Corollary "Pooled
+Estimation under Full Randomization"), unchanged from context-free
+estimation. When a design is supplied, `level_probs` reweight (via
+inverse-probability/raking weights) the other attributes' realized
+levels toward the design's declared marginal probabilities, and
+`constraints` exclude tasks whose other-attribute combination is
+infeasible — implementing the general context-weighted estimator
+(Propositions "Nonparametric Estimation of the APNS/CAPNS"). See
+\code{\link{make_design}} and \code{\link{.attach_design_weights}}.}
 }
 \value{
 An object of class `"cj_apns"` with components:
@@ -87,6 +108,27 @@ An object of class `"cj_apns"` with components:
   * `amce`: AMCE estimates per attribute.
   * `apns`, `mapns`: causal attribution estimates (if requested).
   * `acmce`, `pi_hat`: conditional AMCEs and group shares (if conditional).
+  * `mapns_coverage`: named vector (per attribute), only present when
+    `assumption` is `"conditional"` or `"both"`. The share (in \[0, 1\])
+    of the preference-ordering-group population (by \eqn{\pi_g} mass)
+    that had informative-task coverage and so contributed to the
+    reported conditional MAPNS. Groups lacking coverage are excluded and
+    the remaining groups' weights renormalized (rather than treating an
+    unidentified group's contribution as zero, which would be downward
+    biased); `mapns_coverage` tells you how much of the population that
+    renormalization is silent about. Equals 1 when every group had
+    coverage.
+  * `missing_groups`: data.frame (`item`, `contrast`, `pi_g`)
+    listing every preference-ordering group with zero informative-task
+    observations for its own extreme pair — excluded from the
+    conditional MAPNS sum entirely. `NULL` if none, or if
+    `assumption = "separability"`.
+  * `capns_table`: data.frame (`item`, `contrast`, `estimate`, `pi_g`,
+    `n_informative`) listing every conditional CAPNS estimate that *was*
+    identified, across all attributes, sorted by `n_informative`
+    descending. Use alongside `missing_groups` to see the full group
+    structure feeding each attribute's conditional MAPNS. `NULL` under
+    `assumption = "separability"`.
   * `ci`: confidence intervals (if SEs requested).
   * `se_detail`: named vector of standard errors.
 }

@@ -8,19 +8,39 @@ make_design(level_probs, constraints = NULL)
 }
 \arguments{
 \item{level_probs}{Named list of named numeric vectors. Each element is an
-attribute; inner names are levels, values are marginal probabilities
-(must sum to 1).}
+attribute; inner names are levels, values are the *target* marginal
+probabilities for that attribute's levels (must sum to 1). Attributes
+omitted from this list are left unweighted (their empirical distribution
+is used as-is). The current empirical marginal frequency in the data is
+used as the baseline being reweighted away from.}
 
 \item{constraints}{Optional list of lists. Each inner list maps attribute
-names to forbidden level values for a restricted profile combination.}
+names to forbidden level values for a restricted profile combination;
+any profile (row) matching all of an entry's attribute-level
+restrictions simultaneously is excluded (weight 0) — implementing the
+feasible-subset restriction \eqn{\widetilde{\mathcal{T}}_{[-l]}}.}
 }
 \value{
-An object of class `"cj_design"`.
+An object of class \code{"cj_design"}.
 }
 \description{
 Specifies non-uniform randomization for conjoint experiments. When level
 probabilities are not uniform or some profiles are restricted, pass this
-object to \code{cj_apns} via the \code{design} argument.
+object to \code{cj_apns} via the \code{design} argument, which reweights
+\code{\link{estimate_pairwise}}'s difference-in-means toward the declared
+distribution (see \code{\link{.attach_design_weights}}) instead of the
+default pooled estimator (\code{design = "uniform"}).
+}
+\details{
+The reweighting is implemented as an inverse-probability (raking) weight
+rather than literal stratification on the full joint context, which is
+typically far too sparse to estimate directly once more than one or two
+other attributes are involved. This is exact under full randomization
+(independence of attribute levels across profiles and attributes), since
+the joint context distribution then factors into the product of its
+marginals; for attributes whose distribution is not independent of
+others in your design, the marginal-product weighting is an
+approximation to the true joint reweighting.
 }
 \examples{
 d <- make_design(

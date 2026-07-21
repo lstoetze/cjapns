@@ -196,15 +196,23 @@
         mapns_cond_b <- NA_real_
 
         if (info_a$type == "ranking") {
-          # MAPNS = sum_g pi_g |CAPNS_g| at each group's own extreme pair (Prop. 4/8).
-          mapns_cond_b <- 0
+          # MAPNS = sum_g pi_g |CAPNS_g| at each group's own extreme pair
+          # (Prop. 4/8), renormalized over groups with a usable draw this
+          # replicate (see .renormalized_mapns). pi_g is read from
+          # pt$cond_groups, which -- unlike pt$acmce -- includes groups with
+          # no informative-task coverage at the point estimate, so it is the
+          # right source even when a group has no simulated draw here.
+          sim_vals <- c(); pi_vals_ep <- c()
           for (ep in names(info_a$groups)) {
-            v_ep  <- pt$acmce[[a]][[ep]]
+            grp_meta <- pt$cond_groups[[a]][[ep]]
+            pi_g  <- if (!is.null(grp_meta)) grp_meta$pi_g else NA_real_
             sim_v <- .sim_pairwise(info_a$groups[[ep]])
             nm_g  <- paste0("acmce.", make.names(ep), ".", a)
             if (nm_g %in% colnames(boot_mat)) boot_mat[b, nm_g] <- sim_v
-            if (!is.na(sim_v)) mapns_cond_b <- mapns_cond_b + v_ep$pi * abs(sim_v)
+            sim_vals   <- c(sim_vals, if (is.na(sim_v)) NA_real_ else abs(sim_v))
+            pi_vals_ep <- c(pi_vals_ep, pi_g)
           }
+          mapns_cond_b <- .renormalized_mapns(pi_vals_ep, sim_vals)$mapns
         } else if (length(info_a$groups) > 0) {
           pi_info <- pt$pi_hat[[a]]
           is_multilevel_a <- length(pi_info) > 1
@@ -214,23 +222,25 @@
             grp_info <- info_a$groups[[pair]]
 
             if (!is_multilevel_a) {
-              # binary: single scalar pi for all pairs
+              # binary: single scalar pi for all pairs, renormalized if
+              # either the pro or con draw is unusable this replicate.
               sim_pro <- .sim_pairwise(grp_info[["1"]])
               sim_con <- .sim_pairwise(grp_info[["0"]])
-              if (is.na(sim_pro)) sim_pro <- 0
-              if (is.na(sim_con)) sim_con <- 0
-              vals_c <- c(vals_c, pi_info * abs(sim_pro) + (1 - pi_info) * abs(sim_con))
+              agg_pair <- .renormalized_mapns(
+                c(pi_info, 1 - pi_info),
+                c(if (is.na(sim_pro)) NA_real_ else abs(sim_pro),
+                  if (is.na(sim_con)) NA_real_ else abs(sim_con)))
+              vals_c <- c(vals_c, agg_pair$mapns)
               nm_pro <- paste0("acmce.pro.", a, ".", pair)
               nm_con <- paste0("acmce.con.", a, ".", pair)
               if (nm_pro %in% colnames(boot_mat)) boot_mat[b, nm_pro] <- sim_pro
               if (nm_con %in% colnames(boot_mat)) boot_mat[b, nm_con] <- sim_con
             } else {
-              # multilevel: K groups, attribute-level pi
-              sim_grp <- vapply(names(pi_info), function(g) {
-                v <- .sim_pairwise(grp_info[[g]])
-                if (is.na(v)) 0 else v
-              }, numeric(1))
-              vals_c <- c(vals_c, sum(pi_info * abs(sim_grp)))
+              # multilevel: K groups, attribute-level pi, renormalized over
+              # groups with a usable draw this replicate.
+              sim_grp <- vapply(names(pi_info), function(g) .sim_pairwise(grp_info[[g]]), numeric(1))
+              agg_pair <- .renormalized_mapns(pi_info, abs(sim_grp))
+              vals_c <- c(vals_c, agg_pair$mapns)
               for (g in names(pi_info)) {
                 nm_g <- paste0("acmce.", g, ".", a, ".", pair)
                 if (nm_g %in% colnames(boot_mat)) boot_mat[b, nm_g] <- sim_grp[g]
@@ -370,11 +380,16 @@
       info_a <- cond_info[[a]]
       is_ranking_a <- info_a$type == "ranking"
       var_mapns_c <- 0
+      pi_observed  <- 0
 
       if (is_ranking_a) {
-        # ranking: one contribution per extreme-pair group
+        # ranking: one contribution per extreme-pair group. Groups excluded
+        # at the point-estimate stage (no informative-task coverage) are
+        # absent from pt$acmce -- skip them here too, matching the
+        # renormalized point estimate.
         for (ep in names(info_a$groups)) {
-          v_ep  <- pt$acmce[[a]][[ep]]
+          v_ep <- pt$acmce[[a]][[ep]]
+          if (is.null(v_ep)) next
           pi_g  <- v_ep$pi
           sig_g <- .se_or_zero(info_a$groups[[ep]])
           e_g   <- .folded_normal_mean(v_ep$estimate, sig_g)
@@ -382,6 +397,7 @@
           nm_g <- paste0("acmce.", make.names(ep), ".", a)
           if (nm_g %in% names(se_vec)) se_vec[nm_g] <- if (sig_g > 0) sig_g else NA_real_
           var_mapns_c <- var_mapns_c + var_apns_pair
+          pi_observed <- pi_observed + pi_g
         }
       } else {
         for (pair in names(info_a$groups)) {
@@ -389,45 +405,55 @@
           grp_info <- info_a$groups[[pair]]
 
           if (!is.null(v$pro)) {
-            # binary: two groups (pro / con)
+            # binary: two groups (pro / con); either may individually lack
+            # informative-task coverage for this pair.
             pi_val  <- v$pi
-            sig_pro <- .se_or_zero(grp_info[["1"]])
-            sig_con <- .se_or_zero(grp_info[["0"]])
-            e_pro <- .folded_normal_mean(v$pro, sig_pro)
-            e_con <- .folded_normal_mean(v$con, sig_con)
-            var_pro <- v$pro^2 + sig_pro^2 - e_pro^2
-            var_con <- v$con^2 + sig_con^2 - e_con^2
-            var_apns_pair <- pi_val^2 * var_pro + (1 - pi_val)^2 * var_con
-            nm_pro <- paste0("acmce.pro.", a, ".", pair)
-            nm_con <- paste0("acmce.con.", a, ".", pair)
-            if (nm_pro %in% names(se_vec)) se_vec[nm_pro] <- if (sig_pro > 0) sig_pro else NA_real_
-            if (nm_con %in% names(se_vec)) se_vec[nm_con] <- if (sig_con > 0) sig_con else NA_real_
+            var_apns_pair <- 0
+            if (!is.na(v$pro)) {
+              sig_pro <- .se_or_zero(grp_info[["1"]])
+              e_pro   <- .folded_normal_mean(v$pro, sig_pro)
+              var_apns_pair <- var_apns_pair + pi_val^2 * (v$pro^2 + sig_pro^2 - e_pro^2)
+              nm_pro <- paste0("acmce.pro.", a, ".", pair)
+              if (nm_pro %in% names(se_vec)) se_vec[nm_pro] <- if (sig_pro > 0) sig_pro else NA_real_
+              pi_observed <- pi_observed + pi_val
+            }
+            if (!is.na(v$con)) {
+              sig_con <- .se_or_zero(grp_info[["0"]])
+              e_con   <- .folded_normal_mean(v$con, sig_con)
+              var_apns_pair <- var_apns_pair + (1 - pi_val)^2 * (v$con^2 + sig_con^2 - e_con^2)
+              nm_con <- paste0("acmce.con.", a, ".", pair)
+              if (nm_con %in% names(se_vec)) se_vec[nm_con] <- if (sig_con > 0) sig_con else NA_real_
+              pi_observed <- pi_observed + (1 - pi_val)
+            }
           } else {
-            # multilevel: K groups
+            # multilevel: K groups, any of which may lack coverage.
             pi_info <- v$pi
-            var_apns_pair <- sum(sapply(names(pi_info), function(g) {
-              pi_g   <- pi_info[g]
-              amce_g <- v$groups[g]
-              sig_g  <- .se_or_zero(grp_info[[g]])
-              e_g    <- .folded_normal_mean(amce_g, sig_g)
-              pi_g^2 * (amce_g^2 + sig_g^2 - e_g^2)
-            }))
+            var_apns_pair <- 0
             for (g in names(pi_info)) {
+              amce_g <- v$groups[g]
+              if (is.na(amce_g)) next
+              pi_g  <- pi_info[g]
               sig_g <- .se_or_zero(grp_info[[g]])
+              e_g   <- .folded_normal_mean(amce_g, sig_g)
+              var_apns_pair <- var_apns_pair + pi_g^2 * (amce_g^2 + sig_g^2 - e_g^2)
               nm_g <- paste0("acmce.", g, ".", a, ".", pair)
               if (nm_g %in% names(se_vec)) se_vec[nm_g] <- if (sig_g > 0) sig_g else NA_real_
+              pi_observed <- pi_observed + pi_g
             }
           }
           var_mapns_c <- var_mapns_c + var_apns_pair
         }
       }
 
-      # ranking: MAPNS = sum_g pi_g*|ACMCE_g| (Proposition 8), no averaging
-      # over pairs. Non-ranking preferences only identify MAPNS when Dl == 2
-      # (the single pair is trivially every group's extreme pair); for Dl > 2
-      # MAPNS is not estimable (see .mapns_from_pairwise_cond) and its SE is
-      # left unset.
-      se_mapns_c <- if (is_ranking_a || Dl == 2) sqrt(var_mapns_c) else NA_real_
+      # Renormalized (see .renormalized_mapns): Var(sum_{g in O} pi_g X_g /
+      # sum_{g in O} pi_g) = sum_{g in O} pi_g^2 Var(X_g) / (sum_{g in O} pi_g)^2,
+      # treating pi_g as fixed weights. ranking: MAPNS = sum_g pi_g*|ACMCE_g|
+      # (Proposition 8), no averaging over pairs. Non-ranking preferences
+      # only identify MAPNS when Dl == 2 (the single pair is trivially every
+      # group's extreme pair); for Dl > 2 MAPNS is not estimable (see
+      # .mapns_from_pairwise_cond) and its SE is left unset.
+      se_mapns_c <- if ((is_ranking_a || Dl == 2) && pi_observed > 0)
+        sqrt(var_mapns_c) / pi_observed else NA_real_
       nm <- paste0("mapns.conditional.", a)
       if (nm %in% names(se_vec)) se_vec[nm] <- se_mapns_c
     }
