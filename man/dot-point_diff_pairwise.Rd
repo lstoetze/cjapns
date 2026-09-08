@@ -20,8 +20,10 @@
 \description{
 Same point-estimate logic as \code{\link{estimate_pairwise}} (informative-
 task filtering, optional weighting), but skips the cluster-robust SE
-computation entirely. Used by \code{\link{mapns_split_test}}, which calls
-this thousands of times (every candidate pair, on every split) and only
-ever needs the point estimate.
+computation entirely. Used by \code{\link{.split_sample_mapns}} for the
+selection-half computation, which calls this thousands of times (every
+candidate pair, on every split) and only ever needs the point estimate
+there to pick the argmax; the estimation-half computation needs an SE
+and uses \code{\link{estimate_pairwise}} directly instead.
 }
 \keyword{internal}

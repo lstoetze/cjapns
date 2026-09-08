@@ -73,6 +73,48 @@
 #'   infeasible — implementing the general context-weighted estimator
 #'   (Propositions "Nonparametric Estimation of the APNS/CAPNS"). See
 #'   \code{\link{make_design}} and \code{\link{.attach_design_weights}}.
+#' @param split_sample Logical, default `FALSE`. Under separable monotonicity,
+#'   the separability MAPNS is the *maximum* of several noisy pairwise APNS
+#'   estimates (Proposition 3/7); because `max(.)` is convex, this plug-in
+#'   max is upward-biased for the true max (Jensen's inequality), especially
+#'   when several pairs are near-tied. When `TRUE`, `mapns[[attribute]]`'s
+#'   separability entry is replaced with a split-sample estimate for every
+#'   attribute: across `n_splits` random respondent-level halves, one half
+#'   selects the argmax pair and the other estimates that (already-fixed)
+#'   pair's APNS, and the median across splits is reported in place of the
+#'   ordinary plug-in max. This only affects `estimand = "mapns"` under
+#'   `assumption` `"separability"` or `"both"`; it is a no-op (with a
+#'   warning) otherwise. It is a bias-reduction device, not an unbiased
+#'   estimator of the true max — see \code{\link{mapns_split_test}}, which
+#'   reports the full plug-in-vs-split-sample comparison for diagnostic use,
+#'   and whose method this implements internally
+#'   (\code{\link{.split_sample_mapns}}). The split-sample estimate has its
+#'   own SE/CI, reported separately in `mapns_split` (a Rubin's-rules
+#'   combination of within- and between-split variance — see
+#'   \code{\link{.split_sample_mapns}} for the formula and its
+#'   approximations). The main `se`/`ci` output (`se != "none"`) is still
+#'   computed around the ordinary plug-in max, not the split-sample estimate
+#'   now reported in `mapns` — combining the two triggers a warning.
+#' @param n_splits Number of independent random respondent-level splits used
+#'   when `split_sample = TRUE`. Default 200. Ignored otherwise.
+#' @param prop Share of respondents assigned to the *selection* half of each
+#'   split when `split_sample = TRUE`, the remainder going to the estimation
+#'   half. Must be strictly between 0 and 1; default 0.3, i.e. a 30/70
+#'   selection/estimation split. Shifting more data to the estimation half
+#'   (lower `prop`) tightens the confidence interval on the selected pair,
+#'   at the cost of a noisier — but still consistent — argmax selection
+#'   step; raising it stabilises which pair wins at the cost of a wider
+#'   interval. Matches the `prop` argument of
+#'   \code{\link{mapns_split_test}}, so a diagnostic run and an estimation
+#'   run can be held to the same split geometry. Ignored otherwise.
+#' @param seed Integer seed making the whole call reproducible, default 123.
+#'   This covers every stochastic step: the respondent-level splits drawn
+#'   when `split_sample = TRUE` (without a seed, two identical calls return
+#'   different MAPNS values) and the resampling draws behind
+#'   `se = "parametric"` and `se = "bootstrap"`. The caller's RNG stream is
+#'   saved and restored on exit, so `cj_apns()` never disturbs randomness
+#'   elsewhere in the session. Pass `seed = NULL` to draw from the ambient
+#'   stream instead — results then vary call to call.
 #'
 #' @return An object of class `"cj_apns"` with components:
 #'   * `estimand`, `assumption`, `se_method`: as requested.
@@ -100,6 +142,18 @@
 #'     descending. Use alongside `missing_groups` to see the full group
 #'     structure feeding each attribute's conditional MAPNS. `NULL` under
 #'     `assumption = "separability"`.
+#'   * `mapns_split`: data.frame (`item`, `plugin_mapns`, `mapns`, `se`,
+#'     `lower`, `upper`, `n_valid_splits`, `n_splits`), only present when
+#'     `split_sample = TRUE`. `plugin_mapns` is the ordinary full-sample
+#'     plug-in max; `mapns` is the split-sample estimate now stored in the
+#'     main `mapns` output for that attribute; `se`/`lower`/`upper` are a
+#'     Rubin's-rules combination of within- and between-split variance (see
+#'     \code{\link{.split_sample_mapns}}), `NA` if fewer than two splits
+#'     yielded a usable within-split SE; `n_valid_splits` counts how many of
+#'     the `n_splits` replicates yielded both a valid point estimate and a
+#'     valid, finite within-split SE (low values mean the check itself is
+#'     underpowered for that attribute, not that there is no winner's-curse
+#'     bias). `NULL` if `split_sample = FALSE`.
 #'   * `ci`: confidence intervals (if SEs requested).
 #'   * `se_detail`: named vector of standard errors.
 #'
@@ -160,13 +214,54 @@ cj_apns <- function(formula, data, id,
                      tasks = NULL,
                      informative = c("informative", "all"),
                      profile = NULL,
-                     design = "uniform") {
+                     design = "uniform",
+                     split_sample = FALSE, n_splits = 200, prop = 0.3,
+                     seed = 123) {
 
   cl <- match.call()
   estimand <- match.arg(estimand)
   assumption <- match.arg(assumption)
   se <- match.arg(se)
   informative <- match.arg(informative)
+  stopifnot(is.logical(split_sample), length(split_sample) == 1, !is.na(split_sample))
+  stopifnot(is.numeric(n_splits), length(n_splits) == 1, n_splits > 0)
+  n_splits <- as.integer(n_splits)
+  stopifnot(is.numeric(prop), length(prop) == 1, !is.na(prop), prop > 0, prop < 1)
+
+  # Reproducibility: seed every stochastic step of the call at once -- the
+  # respondent-level splits drawn by .split_sample_mapns() below, and the
+  # resampling draws in .se_parametric()/.se_bootstrap() further down. The
+  # caller's RNG stream is saved here and restored on exit, so a non-NULL
+  # default seed makes cj_apns() reproducible without silently fixing the
+  # randomness of whatever the user runs after it.
+  if (!is.null(seed)) {
+    stopifnot(is.numeric(seed), length(seed) == 1, !is.na(seed))
+    if (exists(".Random.seed", envir = globalenv(), inherits = FALSE)) {
+      .old_seed <- get(".Random.seed", envir = globalenv(), inherits = FALSE)
+      on.exit(assign(".Random.seed", .old_seed, envir = globalenv()), add = TRUE)
+    } else {
+      # RNG was uninitialised before this call; set.seed() creates
+      # .Random.seed, so drop it again to leave the session as we found it.
+      on.exit(suppressWarnings(rm(".Random.seed", envir = globalenv())), add = TRUE)
+    }
+    set.seed(seed)
+  }
+
+  if (split_sample && assumption == "conditional")
+    warning("'split_sample = TRUE' has no effect when assumption = \"conditional\": ",
+            "the winner's-curse concern it addresses only arises from the max-selection ",
+            "step under separable monotonicity.", call. = FALSE)
+  if (split_sample && estimand != "mapns")
+    warning("'split_sample = TRUE' has no effect when estimand = \"", estimand,
+            "\": it only adjusts the separability MAPNS (the argmax over pairwise APNS).",
+            call. = FALSE)
+  if (split_sample && se != "none")
+    warning("'split_sample = TRUE' with se != \"none\": the main 'ci'/'se_detail' output is ",
+            "still computed around the ordinary plug-in max, not the split-sample estimate ",
+            "now reported in mapns[[attribute]]$separability (or mapns[[attribute]] under ",
+            "assumption = \"separability\"). The split-sample estimate's own SE/CI (a ",
+            "Rubin's-rules combination across splits) is reported separately in ",
+            "'mapns_split' ('se', 'lower', 'upper' columns).", call. = FALSE)
 
   # ---- validation -------------------------------------------------------
   if (missing(id)) stop("'id' must be specified (e.g., id = ~ ResponseId).")
@@ -199,8 +294,27 @@ cj_apns <- function(formula, data, id,
   # ---- point estimates --------------------------------------------------
   pt <- .estimate_point(formula, data, id, id_var, attr_names,
                         estimand, assumption, preferences, task_var, informative,
-                        profile_var, design)
+                        profile_var, design, split_sample, n_splits, prop, alpha)
   .warn_mapns_not_identified(pt, assumption, preferences)
+
+  # mapns_split: diagnostic detail when split_sample = TRUE -- the ordinary
+  # plug-in max alongside the split-based estimate now reported in mapns,
+  # its own SE/CI (Rubin's-rules combination across splits -- see
+  # .split_sample_mapns()), and how many of the n_splits replicates yielded
+  # both a valid point estimate and a valid, finite within-split SE.
+  mapns_split <- NULL
+  if (!is.null(pt$split_detail) && length(pt$split_detail) > 0) {
+    mapns_split <- do.call(rbind, lapply(names(pt$split_detail), function(a) {
+      sd  <- pt$split_detail[[a]]
+      val <- pt$mapns[[a]]
+      data.frame(item = a, plugin_mapns = sd$plugin_mapns,
+                 mapns = if (is.list(val)) val$separability else val,
+                 se = sd$se, lower = sd$lower, upper = sd$upper,
+                 n_valid_splits = sd$n_valid_splits, n_splits = sd$n_splits,
+                 stringsAsFactors = FALSE)
+    }))
+    row.names(mapns_split) <- NULL
+  }
 
   # ---- conditional-group diagnostics -------------------------------------
   # missing_groups: ordering groups with zero informative-task coverage,
@@ -281,6 +395,7 @@ cj_apns <- function(formula, data, id,
          mapns_coverage = mapns_coverage,
          missing_groups = missing_groups,
          capns_table = capns_table,
+         mapns_split = mapns_split,
          ci = ci, se_detail = se_detail,
          alpha = alpha, B = B, call = cl,
          task_var = task_var, informative = informative,
@@ -394,7 +509,9 @@ cj_apns <- function(formula, data, id,
 .estimate_point <- function(formula, data, id, id_var, attr_names,
                             estimand, assumption, preferences,
                             task_var = NULL, informative = "all",
-                            profile_var = NULL, design = "uniform") {
+                            profile_var = NULL, design = "uniform",
+                            split_sample = FALSE, n_splits = 200,
+                            prop = 0.3, alpha = 0.05) {
 
   attributes_info <- lapply(attr_names, function(a) levels(data[[a]]))
   names(attributes_info) <- attr_names
@@ -411,6 +528,7 @@ cj_apns <- function(formula, data, id,
   apns <- list(); mapns <- list()
   pi_hat <- list(); acmce <- list()
   cond_groups <- list(); mapns_coverage <- list()
+  split_detail <- list()
   do_sep  <- assumption %in% c("separability", "both")
   do_cond <- assumption %in% c("conditional", "both")
 
@@ -447,6 +565,27 @@ cj_apns <- function(formula, data, id,
       }
       # Proposition 3: MAPNS = max over unique pairs of APNS = max |AMCE(tq, tp)|
       mapns_sep <- max(sapply(apns_sep, `[[`, "estimate"))
+
+      # Optional winner's-curse mitigation (Jensen's inequality: the plug-in
+      # max is upward-biased for the true max, worst when several pairs are
+      # near-tied). Replaces mapns_sep with the median, across n_splits
+      # respondent-level splits, of estimating an argmax pair (selected on
+      # one random half) on the other, independent half -- see
+      # .split_sample_mapns() / mapns_split_test() for the method and its
+      # own limitations (a bias-reduction device, not an unbiased estimator).
+      # Individual pairwise apns_sep entries are left untouched: winner's
+      # curse only affects the max operation, not the pairwise estimates
+      # feeding it.
+      if (split_sample && estimand == "mapns") {
+        ss <- .split_sample_mapns(data, outcome_var, a, levs, id_var, task_var,
+                                   informative, profile_var, weights_col, n_splits,
+                                   prop = prop, alpha = alpha)
+        split_detail[[a]] <- list(plugin_mapns = mapns_sep,
+                                   se = ss$se, lower = ss$lower, upper = ss$upper,
+                                   n_valid_splits = ss$n_valid_splits,
+                                   n_splits = ss$n_splits)
+        mapns_sep <- ss$estimate
+      }
     }
 
     # ── conditional separable monotonicity ──────────────────────────────
@@ -668,7 +807,8 @@ cj_apns <- function(formula, data, id,
        pi_hat = if (do_cond) pi_hat else NULL,
        acmce = if (do_cond) acmce else NULL,
        cond_groups = if (do_cond) cond_groups else NULL,
-       mapns_coverage = if (do_cond) mapns_coverage else NULL)
+       mapns_coverage = if (do_cond) mapns_coverage else NULL,
+       split_detail = if (split_sample && length(split_detail) > 0) split_detail else NULL)
 }
 
 

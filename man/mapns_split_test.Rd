@@ -13,7 +13,8 @@ mapns_split_test(
   informative = c("informative", "all"),
   design = "uniform",
   n_splits = 200,
-  prop = 0.5,
+  prop = 0.3,
+  alpha = 0.05,
   seed = NULL
 )
 }
@@ -41,7 +42,10 @@ independent.}
 Default 200.}
 
 \item{prop}{Share of respondents assigned to the selection half. Default
-0.5.}
+0.3, i.e. a 30/70 selection/estimation split.}
+
+\item{alpha}{Significance level for the `lower`/`upper` confidence
+interval on the split-based estimate. Default 0.05.}
 
 \item{seed}{Optional integer seed for reproducibility.}
 }
@@ -55,18 +59,28 @@ A data.frame with one row per attribute in `formula`:
       estimate (selection on one random half, estimation on the other)
       across valid splits. Comparable in magnitude to `plugin_mapns`; a
       systematic gap between them is the winner's-curse signature.}
-    \item{`n_valid_splits`}{Number of splits (out of `n_splits`) where
-      the selected pair had informative-task coverage in the estimation
-      half. Low values mean the check itself is underpowered (thin
-      attribute), not that there is no bias.}
+    \item{`se`, `lower`, `upper`}{SE and confidence interval for
+      `split_median`, via the same Rubin's-rules combination of within-
+      and between-split variance used internally by
+      \code{cj_apns(split_sample = TRUE)} -- see
+      \code{\link{.split_sample_mapns}} for the formula and its
+      approximations (in particular, the combining rule is derived for
+      combining *means*; applying it to the reported *median* is a
+      practical approximation). `NA` if fewer than two splits yield a
+      usable within-split SE.}
+    \item{`n_valid_splits`}{Number of splits (out of `n_splits`) with
+      both a valid point estimate and a valid, finite within-split SE.
+      Low values mean the check itself is underpowered (thin attribute),
+      not that there is no bias.}
     \item{`selection_entropy`}{Shannon entropy, in bits, of how often
       each pair was selected as the argmax across splits. 0 means the
       same pair always wins (stable, low winner's-curse risk); higher
       values indicate a near-tie among several pairs, where selection
       noise -- and hence winner's-curse risk -- is largest.}
   }
-  The per-split raw values (`split_estimate`, `selected_pair` for every
-  split and attribute) are attached as `attr(x, "detail")` for plotting.
+  The per-split raw values (`split_estimate`, `split_se`, `selected_pair`
+  for every split and attribute) are attached as `attr(x, "detail")` for
+  plotting.
 }
 \description{
 Under separable monotonicity, \eqn{\mathrm{MAPNS}_l} is the maximum of
