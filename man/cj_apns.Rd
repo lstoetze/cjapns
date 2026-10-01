@@ -68,6 +68,10 @@ is unaffected). See \code{\link{make_preferences}}.}
 * `"parametric"` (default): Parametric bootstrap — resamples AMCEs
   from their asymptotic normal distribution and applies the plugin
   transformation. Fast and appropriate for the absolute-value mapping.
+  Note that because `|.|` and `max(.)` are non-negative, the resulting
+  intervals structurally exclude exactly zero and must not be read as
+  tests of the null of attribute irrelevance; use
+  \code{\link{cj_ri_test}} for that.
 * `"bootstrap"`: Nonparametric bootstrap — resamples respondents with
   replacement and re-estimates the full pipeline.
 * `"folded_normal"`: Analytical SEs using the folded normal
@@ -246,4 +250,10 @@ in Conjoint Analysis.
 
 Hainmueller, J., Hopkins, D.J. and Yamamoto, T. (2014). Causal Inference
 in Conjoint Analysis. *Political Analysis*, 22(1), 1--30.
+}
+\seealso{
+\code{\link{cj_ri_test}} for the randomization test of attribute
+  irrelevance, which supplies the p-values the confidence intervals here
+  cannot; \code{\link{mapns_split_test}} for the winner's-curse
+  diagnostic.
 }
